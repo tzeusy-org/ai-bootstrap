@@ -101,6 +101,11 @@ def install_fakes(fake_bin: FakeBinDir) -> None:
                 print(fixture["failures"][key], file=sys.stderr)
                 raise SystemExit(1)
 
+        if argv == ["config", "get", "issue_prefix", "--json"]:
+            fail("bd-config:issue_prefix")
+            print(json.dumps(fixture.get("prefix_payload", {"key": "issue_prefix", "value": "aib"})))
+            raise SystemExit(0)
+
         if "list" in argv:
             label = argv[argv.index("--label") + 1] if "--label" in argv else ""
             status = next((part.split("=", 1)[1] for part in argv if part.startswith("--status=")), "")
@@ -307,6 +312,9 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                 if "list" in sys.argv:
                     print(json.dumps([]))
                     raise SystemExit(0)
+                if "config" in sys.argv:
+                    print(json.dumps({"key": "issue_prefix", "value": "aib"}))
+                    raise SystemExit(0)
                 print("unexpected bd command", file=sys.stderr)
                 raise SystemExit(1)
                 """,
@@ -379,6 +387,7 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                     "0",
                 ),
                 ("-C", repo_root, "list", "--label", "pr-review-task", "--json", "--limit", "0"),
+                ("-C", repo_root, "config", "get", "issue_prefix", "--json"),
                 ("show", original_id, "--json"),
                 ("show", self_heal_id, "--json"),
             },
@@ -1573,30 +1582,86 @@ class NormalizePrReviewStateTests(unittest.TestCase):
         for forbidden in ("TOKEN=top-secret", "/private/absolute/path", "Traceback", repo_root):
             self.assertNotIn(forbidden, result.stdout + result.stderr)
 
-    def test_open_agent_branch_reports_a_dotted_self_heal_candidate(self) -> None:
-        original_id = "aib-swr.1"
-        fixture = {
-            "blocked_pr_review": [],
-            "shows": {
-                original_id: [{"id": original_id, "status": "open", "labels": [], "external_ref": ""}],
-            },
-            "prs": {},
-            "open_prs": [
-                {
-                    "number": 77,
-                    "headRefName": f"agent/{original_id}",
-                    "createdAt": "2026-08-14T03:00:00Z",
+    def test_open_agent_branch_reports_only_project_prefix_self_heal_candidates(self) -> None:
+        for prefix, original_id in (("aib", "aib-swr.1"), ("bu", "bu-abc")):
+            with self.subTest(prefix=prefix):
+                foreign_id = "custody-private-adopted-20260927"
+                fixture = {
+                    "prefix_payload": {"key": "issue_prefix", "value": prefix},
+                    "shows": {original_id: [{"id": original_id, "status": "open", "labels": []}]},
+                    "open_prs": [
+                        {
+                            "number": 77,
+                            "headRefName": f"agent/{original_id}",
+                            "createdAt": "2026-08-14T03:00:00Z",
+                        },
+                        {
+                            "number": 4239,
+                            "headRefName": f"agent/{foreign_id}",
+                            "createdAt": "2026-08-14T03:00:00Z",
+                        },
+                        {
+                            "number": 78,
+                            "headRefName": f"agent/{prefix}extra-abc",
+                            "createdAt": "2026-08-14T03:00:00Z",
+                        },
+                    ],
                 }
-            ],
+
+                result, calls, _ = self.run_fixture(fixture)
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                payload = json.loads(result.stdout)
+                self.assertEqual(payload["status"], "success")
+                self.assertEqual(payload["errors"], [])
+                self.assertEqual(len(payload["self_heal_candidates"]), 1)
+                candidate = payload["self_heal_candidates"][0]
+                self.assertEqual(candidate["original_id"], original_id)
+                self.assertEqual(candidate["pr_number"], 77)
+                self.assertEqual(candidate["recommendation"], "self-heal-original-and-review-wiring")
+                looked_up = [
+                    call["argv"][call["argv"].index("show") + 1]
+                    for call in calls if call["tool"] == "bd" and "show" in call["argv"]
+                ]
+                self.assertEqual(looked_up, [original_id])
+
+    def test_invalid_project_prefix_or_in_prefix_discovery_manualizes_collection(self) -> None:
+        original_id = "bu-abc"
+        review_id = "bu-review"
+        base_fixture = {
+            "prefix_payload": {"key": "issue_prefix", "value": "bu"},
+            "blocked_pr_review": [original_bead(original_id, 41), review_task(review_id, original_id)],
+            "resolver_payload": {"ok": True, "original_id": original_id, "pr_number": 41},
+            "prs": {"41": pr_payload("OPEN")},
+            "shows": {original_id: [original_bead(original_id, 41)]},
+            "open_prs": [{"number": 77, "headRefName": "agent/bu-missing",
+                          "createdAt": "2026-08-14T03:00:00Z"}],
         }
+        cases = {
+            "missing-prefix": ({"prefix_payload": {"key": "issue_prefix"}}, "invalid-issue-prefix", "issue-prefix"),
+            "null-prefix": ({"prefix_payload": {"key": "issue_prefix", "value": None}}, "invalid-issue-prefix", "issue-prefix"),
+            "empty-prefix": ({"prefix_payload": {"key": "issue_prefix", "value": ""}}, "invalid-issue-prefix", "issue-prefix"),
+            "invalid-prefix": ({"prefix_payload": {"key": "issue_prefix", "value": "bu-*"}}, "invalid-issue-prefix", "issue-prefix"),
+            "wrong-key": ({"prefix_payload": {"key": "other", "value": "bu"}}, "invalid-issue-prefix", "issue-prefix"),
+            "invalid-shape": ({"prefix_payload": []}, "invalid-issue-prefix", "issue-prefix"),
+            "prefix-read-failure": ({"failures": {"bd-config:issue_prefix": "read failed"}}, "command-failed", "issue-prefix"),
+            "missing-issue": ({}, "command-failed", "self-heal"),
+            "malformed-show": ({"shows": {**base_fixture["shows"], "bu-missing": {}}}, "invalid-show-response", "self-heal"),
+            "malformed-branch": ({"open_prs": [{"number": 77, "headRefName": "agent/bu-INVALID"}]}, "invalid-record", "open-prs"),
+        }
+        for name, (overrides, code, scope) in cases.items():
+            with self.subTest(name=name):
+                result, calls, _ = self.run_fixture({**base_fixture, **overrides})
 
-        result, _, _ = self.run_fixture(fixture)
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        candidate = json.loads(result.stdout)["self_heal_candidates"][0]
-        self.assertEqual(candidate["original_id"], original_id)
-        self.assertEqual(candidate["pr_number"], 77)
-        self.assertEqual(candidate["recommendation"], "self-heal-original-and-review-wiring")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                payload = json.loads(result.stdout)
+                self.assertEqual(payload["status"], "partial")
+                self.assertIn({"code": code, "scope": scope}, payload["errors"])
+                self.assertTrue(payload["findings"])
+                self.assertTrue(all(item["recommendation"] == "manual-triage"
+                                    for item in payload["findings"] + payload["self_heal_candidates"]))
+                if scope == "issue-prefix":
+                    self.assertFalse(any("bu-missing" in call["argv"] for call in calls))
 
     def test_invalid_bootstrap_never_echoes_a_secret_or_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
