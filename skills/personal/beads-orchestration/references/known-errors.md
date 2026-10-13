@@ -150,6 +150,15 @@ assuming breakage, then record the rename here AND fix the subskill docs.
 
 ## State-transition quirks
 
+### Conditional guards reject label-only updates
+
+`bd update <id> --if-assignee <actor> --if-status in_progress --add-label review-running`
+fails because conditional guards require a field update; label and parent edits
+alone do not qualify. After freshly verifying ownership and status, include the
+unchanged `--status in_progress` field, then reread ownership, labels and the
+canonical fields. Do not treat the label edit itself as guarded. Observed
+2026-10-09 with bd 1.0.4; the claim had succeeded and was preserved during recovery.
+
 Some lifecycle transitions error even though the end state is legitimate.
 When a direct `bd update <id> --status <to>` is rejected:
 
@@ -2299,3 +2308,44 @@ beads (`bu-atsax`, `bu-m09qm`) whose prior coordinator session's heartbeat was
 ## tze-hud: `gh pr merge --squash --auto` fails "Auto merge is not allowed"
 - **Symptom**: reviewer cannot enter the merge queue; repo has enablePullRequestAutoMerge off.
 - **Workaround**: enqueue directly with GraphQL `mutation{enqueuePullRequest(input:{pullRequestId:$id}){mergeQueueEntry{position}}}` (queue still enforces required checks). Observed: 2026-10-03, tze-hud PR #1247.
+
+
+### Guarded label-only updates need a covered field
+- **Symptom**: `bd update ID --if-assignee ACTOR --add-label LABEL` rejects with `--if-assignee/--if-status require at least one field update ... label and parent edits are not covered by the guard`.
+- **Fix**: confirm the current assignee/status, then include the same existing `--status` (a covered field) with the label edit. The label itself is not guarded, so only the sole coordinator writer should do this; do not infer cross-actor mutation authority.
+- **Related**: normalization expects every `pr-review-task` to also have the `pr-review` label; omitting it makes the total inventory partial with `invalid-record`. Repair the existing canonical task, never create a duplicate.
+- Observed: 2026-10-07, bd 1.0.4.
+
+### GitHub CLI refuses log bodies with terminal escape sequences
+
+`gh api .../actions/jobs/<job>/logs` can return nonzero with
+`the response contains terminal escape sequences`. For an authorized diagnostic
+reader, add `--allow-escape-sequences` to `gh api`, capture stdout in memory,
+strip ANSI sequences, and emit only fixed approved categories or source locations.
+Never print or persist raw log bodies as a workaround. Confirmed 2026-10-09.
+
+### Parent cannot be blocked by its descendant
+
+- **Symptom**: `bd dep add PARENT CHILD` refuses: `cannot be blocked by its descendant ... blocked status cascades to descendants ... would inherit the block and never close`.
+- **Fix**: keep the coordinating parent active/in_progress while the child executes; use its existing parent-child relation and explicit completion ledger. The child may depend on finished siblings, but do not add a parent-waits-on-descendant blocks edge or mark that parent blocked in a way that stalls its child. Keep all original parent criteria unchanged and close only after their actual evidence is complete.
+- Confirmed 2026-10-10, bd 1.0.4, butlers gen-1 terminal reconciliation. No dependency was added by the refused command.
+
+### Lease-only renewal stops on transient Dolt write connection timeout
+
+- **Symptom**: guarded `bd update ... --if-assignee ... --notes ... --json` reports `i/o timeout`, then `Error updating <id>: begin write tx: invalid connection`; the lease helper stops and keeps its last successful receipt stale.
+- **Cause**: observed shared Dolt network/write connection timeout. Exact server-side cause remains unknown; this output is not an assignee mismatch or proof that worker processes stopped.
+- **Fix**: preserve the complete failed command output and old failure receipt. Recheck the existing helper is stopped, refresh actual ROOT liveness, then restart only the bounded lease helper under the same canonical mutex. It must read each current canonical record, verify the same assignee, complete real guarded updates, and publish a new successful receipt before lifecycle work resumes. Never waive freshness, forge receipt times, steal a claim, or change shared directory permissions. Confirmed retry renewed 55 owned nonclosed records.
+- **Observed**: 2026-10-11, butlers, bd 1.3.1 (c1c4b642a).
+
+### PR self-heal discovery silently omits older open PRs at the default limit
+
+- **Symptom**: the coordinator normalizer's `self_heal_candidates` drops old PRs after newer PRs appear, while their canonical review findings remain. The normalizer currently calls `gh pr list --state open --json number,headRefName,createdAt` without an explicit limit.
+- **Cause**: `gh pr list` defaults to 30 results. Confirmed 2026-10-13: authenticated complete pagination returned 32 open PRs; the two omitted candidates were independently still OPEN. Candidate disappearance is not merge, closure, or an exhausted frontier.
+- **Workaround**: retain the dated normalizer report and supplement its discovery with authenticated complete paginated open-PR metadata. Preserve omitted candidates and their canonical review/owner dispositions; never close or take over a bead because it disappeared from the capped list. Capture provider responses in memory and retain only required metadata and page counts. Existing unrelated self-heal errors remain separate.
+- **CLI pitfall**: this installed `gh` rejects combining `--slurp` with `--jq` or `--template`. Use `gh api --paginate --slurp` captured in memory, then parse/project the pages, or project individual pages without `--slurp`. Do not print raw PR bodies as a workaround.
+
+### Finite packet retention dereferences intentional test symlink payloads
+
+- **Symptom**: full sealed packet retention reports a size/SHA mismatch on a fixture `snapshot.json`, while repeated worker lstat audits show the original packet is unchanged.
+- **Cause**: a retainer used unconditional `Path.read_bytes()` and `shutil.copy2()` on a manifest entry declared `type=symlink`. These dereference the deliberately planted refusal control, whose sealed body is its lexical link target, rather than the referenced file.
+- **Fix**: qualify the declared type with lstat, hash/read symlink bodies with `os.readlink(...).encode()`, preserve links without dereferencing, and check source/destination containment independently. Retain regular files through their own type/body checks. Do not reseal a correct original, weaken integrity checks, repair permissions, or infer an active writer from this mismatch. Preserve the initial refusal and exact recovery account. Complete typed retention of all5,559 payloads including four symlink controls passed on 2026-10-13 in Butlers; filesystem-mode domains remained separate.
