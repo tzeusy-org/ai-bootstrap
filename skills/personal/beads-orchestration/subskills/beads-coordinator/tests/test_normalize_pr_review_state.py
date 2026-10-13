@@ -1123,6 +1123,9 @@ class NormalizePrReviewStateTests(unittest.TestCase):
             "blocked_pr_review": [original_bead(original_id, 41)],
             "pr_review_tasks_all": [
                 review_task(review_id, original_id, status="in_progress"),
+                # Inactive history is valid inventory, never a dispatch candidate.
+                review_task("aib-review.2", original_id, status="closed"),
+                review_task("aib-review.3", original_id, status="deferred"),
             ],
             "shows": {
                 original_id: [original_bead(original_id, 41)],
@@ -1142,6 +1145,10 @@ class NormalizePrReviewStateTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["errors"], [])
+        self.assertFalse(any(item.get("review_id") in {"aib-review.2", "aib-review.3"}
+                             for item in payload["findings"]))
         original = next(item for item in payload["findings"] if item["kind"] == "original")
         self.assertEqual(original["canonical_review_id"], review_id)
         candidate = payload["self_heal_candidates"][0]

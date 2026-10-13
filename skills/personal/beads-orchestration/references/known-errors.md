@@ -2299,3 +2299,15 @@ beads (`bu-atsax`, `bu-m09qm`) whose prior coordinator session's heartbeat was
 ## tze-hud: `gh pr merge --squash --auto` fails "Auto merge is not allowed"
 - **Symptom**: reviewer cannot enter the merge queue; repo has enablePullRequestAutoMerge off.
 - **Workaround**: enqueue directly with GraphQL `mutation{enqueuePullRequest(input:{pullRequestId:$id}){mergeQueueEntry{position}}}` (queue still enforces required checks). Observed: 2026-10-03, tze-hud PR #1247.
+
+## `bd worktree create` prints "Fixed .beads permissions to 0700"
+
+bd 1.3.x tightens the new worktree's `.beads/` to 0700 on creation (seen
+2026-10-06, tze-hud). On hosts where the project tree is shared with a
+reviewer by group/ACL, that locks them out. Restore right after creation:
+`chmod 2770 <worktree>/.beads` (match the main checkout's `.beads` mode via
+`stat -c %a`). The ACL entries survive; only the mode bits change.
+
+## Guarded label-only updates require a field update (bd 1.0.4)
+
+Observed 2026-10-06: `bd update ID --if-assignee ACTOR --add-label pr-review` fails with `--if-assignee/--if-status require at least one field update`; label and parent edits are not covered by that guard. Read and verify current ownership, then include the intended current status field (for example `--status blocked`) with the guarded label change, and verify both afterward. Do not drop ownership verification or blindly overwrite a stale status.
