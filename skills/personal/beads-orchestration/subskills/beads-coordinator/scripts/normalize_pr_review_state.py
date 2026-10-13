@@ -53,7 +53,7 @@ COOLDOWN = timedelta(minutes=5)
 BEAD_ID_RE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)+(?:\.[0-9]+)*\Z")
 SAFE_CODE_RE = re.compile(r"[a-z0-9][a-z0-9-]*\Z")
 PR_STATES = frozenset({"OPEN", "CLOSED", "MERGED"})
-BEAD_STATUSES = frozenset({"open", "in_progress", "blocked", "closed"})
+BEAD_STATUSES = frozenset({"open", "in_progress", "blocked", "closed", "deferred"})
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -594,7 +594,7 @@ def normalize(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     for issue_id, record in records_by_id.items():
         if "pr-review-task" in labels(record):
             status = record.get("status")
-            if status == "closed":
+            if status in {"closed", "deferred"}:
                 continue
             if not isinstance(status, str) or status not in {"open", "blocked", "in_progress"}:
                 report_error(errors, "invalid-bead-status", "review-context")
