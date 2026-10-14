@@ -66,4 +66,4 @@ export.auto: false
 
 export.interval: 0
 
-sync.remote: "git+https://github.com/Tzeusy/ai-bootstrap.git"
+sync.remote: "git+https://github.com/tzeusy-org/ai-bootstrap.git"

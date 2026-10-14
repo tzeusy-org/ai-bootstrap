@@ -111,7 +111,7 @@ For a standalone installation, clone this repository recursively, generate its
 skill views, then link the tool homes:
 
 ```bash
-git clone --recursive https://github.com/Tzeusy/ai-bootstrap.git
+git clone --recursive https://github.com/tzeusy-org/ai-bootstrap.git
 cd ai-bootstrap
 ./scripts/link-ai-skills.sh "$(pwd)"
 ln -sfn "$(pwd)/.claude" "$HOME/.claude"
