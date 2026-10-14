@@ -97,6 +97,12 @@ Never treat agreement to one item as approval of another. If fresh evidence
 invalidates the framing, pause that item, revise it, and re-run adversarial
 review instead of pressuring the owner to answer a stale question.
 
+**Close every walkthrough with the apply offer.** After the last item is
+recorded, ask once, as its own question, whether to apply the recorded
+decisions now. A "yes" is the explicit apply instruction for exactly the
+`Agreed` and `Held` items in this packet; a "no" or silence leaves them
+recorded and unrouted. Never fold the offer into an item's question.
+
 ## Route recorded decisions
 
 Route decisions only when the user explicitly asks. Re-read dependencies and
@@ -110,6 +116,13 @@ Use the apply checklist in
 [`references/interaction-and-application.md`](references/interaction-and-application.md),
 then mark each item `Applied`, `Held`, `Rejected`, or `Superseded` only from the
 owning workflow's evidence. Keep implementation work in that normal workflow.
+
+Applying is finished only when the tracker reflects every routed decision
+(checklist § Update tracker artifacts): each `Agreed` item has a filed or
+updated work item carrying its decision record and boundary, each `Held` item's
+re-ask trigger is noted on the trigger item, affected existing items carry a
+note, and the packet's routing evidence names those IDs. Then re-run the
+validator without `--require-review-ready` and report what was routed.
 
 ## Do not use when
 

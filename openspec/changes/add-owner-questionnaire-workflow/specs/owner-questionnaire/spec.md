@@ -117,3 +117,26 @@ Scope: v1-mandatory
 
 - **WHEN** a packet uses a pass-prefix value, reserved or mismatched reviewer, missing review field, duplicate or blank option, absent recommended option, empty evidence, unknown state, duplicate ID, unresolved placeholder, or incomplete agreed record
 - **THEN** the validator exits nonzero and identifies every detected defect
+
+### Requirement: Walkthrough Ends With An Apply Offer
+
+The workflow MUST close every owner walkthrough by asking once whether to apply the recorded decisions, and on an explicit yes MUST route them through the owning workflows until the project tracker reflects every routed decision.
+
+ID: REQ-owner-questionnaire-007
+Source: owner request 2026-10-14 (apply step at end of questionnaire); REQ-owner-questionnaire-005
+Scope: v1-mandatory
+
+#### Scenario: Owner accepts the apply offer
+
+- **WHEN** the last pending item is recorded and the owner answers yes to the closing apply question
+- **THEN** each Agreed item has a filed or updated tracker item carrying its decision record and boundary, each Held item's re-ask trigger is noted on its trigger item, and the packet's routing evidence names those IDs
+
+#### Scenario: Owner declines or does not answer
+
+- **WHEN** the owner answers no or does not answer the closing apply question
+- **THEN** every item stays recorded with routing evidence `Not routed` and no tracker, spec, or doctrine artifact is changed
+
+#### Scenario: Owner-assigned items are not force-closed
+
+- **WHEN** applying finds an existing owner-assigned item already satisfied by a recorded decision
+- **THEN** the workflow notes that it is ready to close instead of force-closing it

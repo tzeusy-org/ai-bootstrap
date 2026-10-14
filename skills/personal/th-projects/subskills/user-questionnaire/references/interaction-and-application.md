@@ -38,6 +38,16 @@ record it, set `Needs-rework`, and obtain fresh scope and recommendation passes
 before routing it. A plain selection of an existing option needs no post-answer
 review. An explicit rejection becomes `Rejected`.
 
+## Apply offer at the end of the walkthrough
+
+When the last pending item has been answered, ask one closing question: apply
+the recorded decisions now, or leave them recorded for later. Summarize first
+which items are `Agreed`, `Held`, or `Rejected` and where each would be routed.
+A "yes" authorizes routing of exactly those records through the checklist
+below; it is not approval of any external, live, deployment, or merge action,
+and it never extends to items answered in another packet. A "no" leaves every
+item recorded with routing evidence `Not routed`.
+
 ## Applying decisions
 
 Explicit permission to "apply", "update the beads/specs", or equivalent is a
@@ -59,6 +69,31 @@ off to the owning workflow:
   explicit authorization separately from the questionnaire packet;
 - validate the resulting tracker/spec graph; and
 - record exact routing and downstream evidence in the packet.
+
+### Update tracker artifacts
+
+In a Beads-backed project the direction/Beads workflow performs these updates
+(`/beads-orchestration`); elsewhere use the project's tracker equivalent:
+
+1. Search open and blocked items for each decision first; update a matching
+   item instead of filing a duplicate.
+2. For each `Agreed` item, file or update one work item per cohesive outcome
+   (see `../../references/work-allocation.md`). Each carries the decision ID,
+   the owner's choice, the recorded timestamp, the packet path, and the final
+   authorization boundary verbatim, plus the tracker's readiness fields.
+   Group several decisions from one packet under one parent when that keeps
+   them reviewable together.
+3. Keep every separate gate as an explicit step or dependency: a doctrine
+   change lands as a PR the owner merges; an environment, deployment, or live
+   step names the separate approval it still needs.
+4. For each `Held` item, note the re-ask trigger and the status-quo default on
+   the item whose completion triggers it.
+5. Append a short note to existing items the decision affects (parents,
+   superseded or re-scoped work). Do not force-close an item assigned to the
+   owner; note that it is ready to close instead.
+6. Lint or validate the new and changed items, then write their IDs into each
+   packet item's routing evidence and set the item `Applied` (or leave it
+   `Held`).
 
 For Beads, owner input can satisfy an owner-decision dependency without making
 an implementation leaf runnable. A leaf is runnable only when its packet is

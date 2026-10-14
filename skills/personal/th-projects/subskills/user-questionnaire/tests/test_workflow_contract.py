@@ -75,3 +75,13 @@ def test_REQ_owner_questionnaire_006_package_requires_fail_closed_validation():
     assert "--require-review-ready" in SKILL
     assert "validator is structural evidence" in SKILL
     assert "not semantic" in SKILL
+
+
+def test_REQ_owner_questionnaire_007_walkthrough_ends_with_apply_offer():
+    """Spec: REQ-owner-questionnaire-007."""
+    assert "Close every walkthrough with the apply offer" in SKILL
+    assert "Update tracker artifacts" in SKILL
+    assert "## Apply offer at the end of the walkthrough" in INTERACTION
+    assert "### Update tracker artifacts" in INTERACTION
+    assert "Do not force-close an item assigned to the\n   owner" in INTERACTION
+    assert "re-ask trigger" in INTERACTION
