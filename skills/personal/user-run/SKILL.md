@@ -52,7 +52,7 @@ and write everything. Earlier runs' artifacts stay readable under
 
 1. **Pick the slug once per session**: `<topic>-<YYYYmmdd>`, e.g.
    `dev-rollout-20261009`. Reuse it for every later step in the session.
-2. **Scaffold**: `bash <skill-dir>/scripts/scaffold.sh <slug>`. It is
+2. **[Scaffold](scripts/scaffold.sh)**: `bash <skill-dir>/scripts/scaffold.sh <slug>`. It is
    idempotent, never overwrites `run.sh`, and first prunes user-run state
    older than 7 days ([cleanup](#cleanup)).
 3. **Write the payload.** Edit only the `PAYLOAD` heredoc in `run.sh`:
@@ -77,7 +77,7 @@ and write everything. Earlier runs' artifacts stay readable under
      payloads stay as `payload.<RUN_ID>.sh`.
 4. **Validate**: `bash -n run.sh`, and re-read the payload once.
 5. **Present it** to the owner using the brief below, then stop and wait.
-6. **When the owner says it ran**, run `bash <skill-dir>/scripts/status.sh <slug>`:
+6. **When the owner says it ran**, run [`bash <skill-dir>/scripts/status.sh <slug>`](scripts/status.sh):
    it reports the state, the `RESULT` lines, the artifacts and the log tail.
    Read more of the log only if that is not enough. States:
    - `done exit=N`: the payload ran; N is its exit code (130 = Ctrl-C).
@@ -135,7 +135,7 @@ Lead with the command, then:
 
 ## Cleanup
 
-`scripts/cleanup.sh [--days N] [--dry-run]` (scaffold runs it with the
+[`scripts/cleanup.sh [--days N] [--dry-run]`](scripts/cleanup.sh) (scaffold runs it with the
 default 7 days) removes, under `<base>`, slug dirs with no file modified in N
 days, and older runs (log, exit, payload copy, artifacts) inside live slug
 dirs, always keeping the latest run. It touches only dirs whose `run.sh`
