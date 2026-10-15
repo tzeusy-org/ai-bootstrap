@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -1011,9 +1012,101 @@ def scan_worktrees(
     return sorted(findings, key=lambda item: item["worktree_id"])
 
 
+def disk_bytes(path: Path) -> int:
+    """Allocated bytes under ``path`` without following symlinks or mounts."""
+    total = 0
+    device = path.lstat().st_dev
+    pending = [path]
+    while pending:
+        current = pending.pop()
+        try:
+            entries = list(os.scandir(current))
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                info = entry.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            total += getattr(info, "st_blocks", 0) * 512 or info.st_size
+            if entry.is_dir(follow_symlinks=False) and info.st_dev == device:
+                pending.append(Path(entry.path))
+    return total
+
+
+def artifact_bead(name: str, repo_root: Path) -> dict[str, Any] | None:
+    """Resolve the longest ``<bead-id>-...`` prefix of a directory name."""
+    parts = name.split("-")
+    for length in range(min(len(parts), 4), 1, -1):
+        candidate = "-".join(parts[:length])
+        if not BEAD_ID_RE.fullmatch(candidate):
+            continue
+        payload, error = command_json(["bd", "show", candidate, "--json"], repo_root)
+        if error is None:
+            record, _ = requested_record(payload, candidate)
+            if record is not None:
+                return record
+    return None
+
+
+def pr_closed(record: dict[str, Any], repo_root: Path, errors: list[dict[str, str]]) -> bool | None:
+    ref = record.get("external_ref")
+    match = re.fullmatch(r"gh-pr:([0-9]+)", ref) if isinstance(ref, str) else None
+    if match is None:
+        return None
+    payload, error = command_json(["gh", "pr", "view", match.group(1), "--json", "state"], repo_root)
+    state = payload.get("state") if isinstance(payload, dict) else None
+    if error or state not in PR_STATES:
+        report_error(errors, error or "invalid-pr-state", "build-artifacts")
+        return None
+    return state != "OPEN"
+
+
+def scan_build_artifacts(
+    roots: list[Path],
+    *,
+    repo_root: Path,
+    errors: list[dict[str, str]],
+) -> list[dict[str, Any]]:
+    """Attribute each build-artifact directory to its bead and size it.
+
+    Targets die with their bead's PR; receipts are copied out first by the
+    coordinator. This pass only reports.
+    """
+    findings = []
+    for root in roots:
+        if not root.is_dir() or root.is_symlink():
+            report_error(errors, "invalid-artifact-root", "build-artifacts")
+            continue
+        for child in sorted(root.iterdir()):
+            if child.is_symlink() or not child.is_dir():
+                continue
+            record = artifact_bead(child.name, repo_root)
+            status = bead_status(record) if record else None
+            closed_pr = pr_closed(record, repo_root, errors) if record and status != "closed" else None
+            if record is None or status is None:
+                recommendation = "manual-triage"
+            elif status == "closed" or closed_pr:
+                recommendation = "delete-after-receipts"
+            else:
+                recommendation = "preserve-active-bead"
+            findings.append(
+                {
+                    "bytes": disk_bytes(child),
+                    "issue_id": record_id(record) if record else None,
+                    "issue_status": status,
+                    "name": child.name,
+                    "recommendation": recommendation,
+                    "root_index": roots.index(root),
+                }
+            )
+    return findings
+
+
 def fatal_envelope(now: str | None, errors: list[dict[str, str]], pr_review: dict[str, Any]) -> dict[str, Any]:
     return {
         "blockers": [],
+        "build_artifacts": [],
         "claims": [],
         "dolt": {"doctor": None, "status": None},
         "errors": sorted(errors, key=lambda item: (item["scope"], item["code"])),
@@ -1089,12 +1182,14 @@ def scan(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         errors=errors,
     )
     worktrees = scan_worktrees(names, repo_root=repo_root, errors=errors)
+    build_artifacts = scan_build_artifacts(args.artifact_root, repo_root=repo_root, errors=errors)
     errors.sort(key=lambda item: (item["scope"], item["code"]))
-    empty = not (claims or blockers or review_locks or worktrees or pr_review["findings"] or pr_review["self_heal_candidates"])
+    empty = not (claims or blockers or review_locks or worktrees or build_artifacts or pr_review["findings"] or pr_review["self_heal_candidates"])
     status = "partial" if errors else "empty" if empty else "success"
     return (
         {
             "blockers": blockers,
+            "build_artifacts": build_artifacts,
             "claims": claims,
             "dolt": {"doctor": doctor_status, "status": dolt_status},
             "errors": errors,
@@ -1127,6 +1222,13 @@ def main() -> int:
         / "scripts"
         / "normalize_pr_review_state.py",
         help="Canonical report-only PR-review normalizer.",
+    )
+    parser.add_argument(
+        "--artifact-root",
+        action="append",
+        default=[],
+        type=Path,
+        help="Directory whose <bead-id>-* children are build artifacts (repeatable).",
     )
     args = parser.parse_args()
     try:

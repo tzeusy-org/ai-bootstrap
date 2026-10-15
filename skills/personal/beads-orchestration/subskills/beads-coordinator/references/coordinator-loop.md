@@ -215,6 +215,14 @@ git branch -D "agent/${REVIEW_ID}" 2>/dev/null || true
 
 Do not delete the branch before closure; correlation depends on it.
 
+In the same step, delete the bead's build artifacts. Copy receipts (gate logs,
+exit codes, screenshots, small evidence files) into the bead's evidence
+directory first; then delete every `<bead-id>-*` artifact directory under the
+repo's artifact roots (named in its `AGENTS.md`). Do this on PR merge or close
+even if the bead stays open for an owner check: the target has no further use.
+The cleanup preflight's `build_artifacts` section lists stragglers as
+`delete-after-receipts`.
+
 Priority rule:
 - if any `pr-review-task` bead is dispatchable and a slot is open, dispatch it
   before selecting from `bd ready`
