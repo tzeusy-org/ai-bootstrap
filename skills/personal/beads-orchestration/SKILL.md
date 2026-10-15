@@ -69,6 +69,14 @@ resolves against the wrong tree.
   starts.
 - Worktrees live at `.worktrees/parallel-agents/<id>` on branch `agent/<id>`.
 - `.beads/` is Dolt-backed and gitignored — never commit it to code branches.
+- **Build artifacts die with the bead.** A bead owns at most one build target,
+  tied to its worktree and reused across its commits, never a fresh one per
+  commit. Name any artifact directory outside the worktree `<bead-id>-…`. When
+  the bead's PR merges or closes, the coordinator copies receipts (logs, exit
+  codes, screenshots) to the bead's evidence and deletes the target with the
+  worktree. Full disk is not an operator blocker while targets of merged or
+  closed beads remain. A repo may tighten this, but "keep everything" without
+  a retention rule is not a policy.
 - bd 1.0.4 has no `--rig` flag: target another project with `bd -C <path> …`.
 - **Spirit > spec > DAG.** Beads are the implementation DAG derived from the
   project's specs, which serve its doctrine (`th-projects`). The writer derives

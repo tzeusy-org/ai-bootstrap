@@ -28,6 +28,8 @@ or mutate lifecycle state.
 - auditing stuck `in_progress`, `blocked`, `pr-review`, or `review-running`
   state
 - reporting orphaned coordinator worktrees or branches tied to Beads issues
+- sizing build-artifact directories (`--artifact-root`) whose bead is closed
+  or whose PR merged, so the coordinator can reclaim disk
 
 ## Do Not Use This Skill When
 
@@ -94,8 +96,9 @@ become a competing doctrine.
    exact claim, stall-heartbeat, and mutation-authority rules before handing a
    finding to the coordinator.
 2. From the cleanup package directory, run
-   `uv run scripts/cleanup_scan.py --repo-root "${REPO_ROOT}"` to collect
-   compact read-only findings. Treat `partial` and `fatal` as manual-triage
+   `uv run scripts/cleanup_scan.py --repo-root "${REPO_ROOT}"` (plus one
+   `--artifact-root <dir>` per artifact root the repo's `AGENTS.md` names) to
+   collect compact read-only findings. Treat `partial` and `fatal` as manual-triage
    reports; do not forward command output or infer a mutation from them.
 3. Use the relevant passes from the reference files to interpret the report.
    When evidence is incomplete or a bead is held by a live actor (fresh

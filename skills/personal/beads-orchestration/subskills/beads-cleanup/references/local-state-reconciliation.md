@@ -70,6 +70,21 @@ exact ID is manual triage.
 
 The coordinator re-verifies and owns any lifecycle or repository change.
 
+## Pass 5c: Build Artifacts
+
+`build_artifacts` lists each `<bead-id>-*` directory under the given
+`--artifact-root`s with its allocated `bytes`. The scanner resolves the longest
+matching bead id and, for a bead that is not closed, its `gh-pr:` PR state.
+
+| Evidence | Report recommendation |
+|---|---|
+| Bead closed, or its PR merged or closed | `delete-after-receipts` |
+| Bead active and its PR open or absent | `preserve-active-bead` |
+| No bead id resolves from the name | `manual-triage` |
+
+Report the reclaimable total. The coordinator copies receipts out and deletes;
+cleanup never does.
+
 ## Pass 6: Stale `review-running` Labels
 
 `review_locks` distinguishes a live reviewer from a candidate stale lock:

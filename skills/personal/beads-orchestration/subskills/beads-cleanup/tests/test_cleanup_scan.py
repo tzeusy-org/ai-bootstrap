@@ -262,6 +262,12 @@ class CleanupScanTests(unittest.TestCase):
                 )
             install_fakes(fake_bin)
             argv = [sys.executable, str(SCRIPT), "--repo-root", str(repo_root), "--now", now]
+            if "artifact_dirs" in fixture:
+                artifacts = root / "artifacts"
+                for name in fixture["artifact_dirs"]:
+                    (artifacts / str(name)).mkdir(parents=True)
+                    (artifacts / str(name) / "blob").write_bytes(b"x" * 8192)
+                argv.extend(["--artifact-root", str(artifacts)])
             if normalizer is not None:
                 argv.extend(["--normalizer", str(normalizer)])
             result = subprocess.run(
@@ -320,6 +326,7 @@ class CleanupScanTests(unittest.TestCase):
             json.loads(result.stdout),
             {
                 "blockers": [],
+                "build_artifacts": [],
                 "claims": [],
                 "dolt": {"doctor": "healthy", "status": "healthy"},
                 "errors": [],
@@ -392,6 +399,38 @@ class CleanupScanTests(unittest.TestCase):
         self.assertEqual(worktree["recommendation"], "cleanup-eligible-after-verification")
         self.assertNotIn(repo_root, result.stdout + result.stderr)
         self.assertTrue(any(call["tool"] == "git" for call in calls))
+
+    def test_build_artifacts_die_with_their_bead_or_merged_pr(self) -> None:
+        result, _, _ = self.run_fixture(
+            {
+                "artifact_dirs": [
+                    "aib-done-validation",
+                    "aib-merged-1f12-validation",
+                    "aib-live-target",
+                    "unattributed-cache",
+                ],
+                "shows": {
+                    "aib-done": [bead("aib-done", "closed")],
+                    "aib-merged": [bead("aib-merged", "blocked", external_ref="gh-pr:7")],
+                    "aib-live": [bead("aib-live", "in_progress", external_ref="gh-pr:8")],
+                },
+                "prs": {"7": {"state": "MERGED"}, "8": {"state": "OPEN"}},
+            }
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        found = {item["name"]: (item["issue_id"], item["recommendation"]) for item in payload["build_artifacts"]}
+        self.assertEqual(
+            found,
+            {
+                "aib-done-validation": ("aib-done", "delete-after-receipts"),
+                "aib-merged-1f12-validation": ("aib-merged", "delete-after-receipts"),
+                "aib-live-target": ("aib-live", "preserve-active-bead"),
+                "unattributed-cache": (None, "manual-triage"),
+            },
+        )
+        self.assertTrue(all(item["bytes"] >= 8192 for item in payload["build_artifacts"]))
+        self.assertEqual(payload["errors"], [])
 
     def test_claims_resolve_transferred_reviewer_worktree_by_branch_not_directory_name(self) -> None:
         # The coordinator's two-stage review topology transfers an existing PR
