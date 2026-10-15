@@ -612,6 +612,139 @@ class AdmissionTests(unittest.TestCase):
             p.write_bytes(DELTA.replace('REQ-core-demo-001', 'REQ-core-demo-002').replace('Visible Evidence', 'Different Evidence').encode())
             self.assertEqual(self.admit(root, sha)['verdict'], 'PASS')
 
+        # Backfill uses the same real CLI and native admission as established IDs.
+        cases = (
+            ('legacy-fresh', None),
+            ('established-same', None),
+            ('duplicate-canonical-current', 'duplicate requirement title'),
+            ('duplicate-canonical-baseline', 'duplicate requirement title'),
+            ('second-writer-fresh', 'duplicate requirement title'),
+            ('second-writer-same', 'duplicate ID'),
+            ('foreign-modified-missing-id', 'duplicate requirement title'),
+            ('foreign-modified-malformed-id', 'duplicate requirement title'),
+            ('foreign-added-missing-id', 'duplicate requirement title'),
+            ('foreign-added-malformed-id', 'duplicate requirement title'),
+            ('established-changed', 'duplicate requirement title'),
+            ('missing-id', 'missing ID'),
+            ('malformed-id', 'malformed ID'),
+            ('wrong-capability-id', 'names spec'),
+            ('reused-canonical-id', 'duplicate ID'),
+            ('reused-active-id', 'duplicate ID'),
+            ('added-same-title', 'duplicate requirement title'),
+            ('legacy-removed', 'duplicate requirement title'),
+            ('legacy-renamed', 'duplicate requirement title'),
+            ('missing-scenario', 'has no scenarios'),
+            ('missing-source', 'missing Source'),
+        )
+        environment = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+        for case, refusal in cases:
+            with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as output_tmp:
+                root, output = Path(tmp), Path(output_tmp)
+                self.baseline(root)
+                # Complete this fixture's source before freezing its native baseline.
+                sentinel = root / 'openspec/specs/core-sentinel/spec.md'
+                sentinel.write_bytes(MAIN.replace('core-demo', 'core-sentinel').encode())
+                requirement = REQ.replace('In post-v1 scope, the system SHALL', 'The system SHALL')
+                requirement = requirement.replace('Scope: post-v1', 'Scope: v1-mandatory')
+                legacy = requirement.replace('ID: REQ-core-demo-001\n', '')
+                canonical = root / 'openspec/specs/core-demo/spec.md'
+                canonical.parent.mkdir(parents=True)
+                prefix = '# Core Demo\n\n## Purpose\nBaseline behavior.\n\n## Requirements\n\n'
+                canonical.write_bytes((prefix + (requirement if case.startswith('established-') else legacy)).encode())
+                if case == 'duplicate-canonical-baseline':
+                    canonical.write_bytes(canonical.read_bytes() + b'\n' + legacy.encode())
+                if case == 'reused-canonical-id':
+                    canonical.write_bytes(canonical.read_bytes() + b'\n' + requirement.replace('Visible Evidence', 'Different Evidence').encode())
+                if case in ('second-writer-fresh', 'second-writer-same', 'reused-active-id') or case.startswith('foreign-'):
+                    foreign = root / 'openspec/changes/z-foreign/specs/core-demo/spec.md'
+                    foreign.parent.mkdir(parents=True)
+                    body = requirement
+                    operation = 'MODIFIED'
+                    if case == 'second-writer-fresh':
+                        body = body.replace('REQ-core-demo-001', 'REQ-core-demo-002')
+                    if case == 'reused-active-id':
+                        body = body.replace('Visible Evidence', 'Different Evidence')
+                        operation = 'ADDED'
+                    if case.startswith('foreign-'):
+                        if '-added-' in case:
+                            operation = 'ADDED'
+                        if case.endswith('-missing-id'):
+                            body = legacy
+                        else:
+                            body = body.replace('REQ-core-demo-001', 'REQ-core-demo-invalid')
+                    foreign.write_bytes((f'## {operation} Requirements\n\n' + body + '\n' + FOOTER).encode())
+                self.git(root, 'add', '.')
+                self.git(root, 'commit', '-qm', 'complete identity fixture baseline')
+                sha = self.git(root, 'rev-parse', 'HEAD')
+                body, operation = requirement, 'MODIFIED'
+                if case == 'established-changed':
+                    body = body.replace('REQ-core-demo-001', 'REQ-core-demo-002')
+                elif case == 'missing-id':
+                    body = legacy
+                elif case == 'malformed-id':
+                    body = body.replace('REQ-core-demo-001', 'REQ-core-demo-one')
+                elif case == 'wrong-capability-id':
+                    body = body.replace('REQ-core-demo-001', 'REQ-other-demo-001')
+                elif case == 'added-same-title':
+                    operation = 'ADDED'
+                elif case == 'legacy-removed':
+                    operation = 'REMOVED'
+                elif case == 'legacy-renamed':
+                    operation = 'RENAMED'
+                elif case == 'missing-scenario':
+                    body = body[:body.index('#### Scenario:')]
+                elif case == 'missing-source':
+                    body = body.replace('Source: RFC 0038 D19\n', '')
+                owned = self.add_delta(root)
+                owned.write_bytes((f'## {operation} Requirements\n\n' + body + '\n' + FOOTER).encode())
+                if case == 'duplicate-canonical-current':
+                    canonical.write_bytes(canonical.read_bytes() + b'\n' + legacy.encode())
+                for mode in ('default', 'authoring', 'affected'):
+                    with self.subTest(identity_case=case, interface=mode):
+                        target = output / f'{mode}.json'
+                        args = [sys.executable, str(TOOL), str(root)]
+                        if mode != 'default':
+                            args.append('--authoring')
+                        if mode == 'affected':
+                            args.extend(['--affected-change', 'dashboard-one-mind-goal-surface', '--baseline-ref', sha])
+                        result = subprocess.run(args + ['--findings-json', str(target)],
+                                                stdin=subprocess.DEVNULL, capture_output=True,
+                                                timeout=60, env=environment)
+                        if case == 'duplicate-canonical-current' and mode == 'affected':
+                            self.assertEqual(result.returncode, 2, result.stderr.decode())
+                            self.assertIn(b'outside the entire affected', result.stderr)
+                            self.assertFalse(target.exists())
+                            continue
+                        expected = 1 if refusal or (case == 'legacy-fresh' and mode == 'authoring') else 0
+                        if case == 'missing-source' and mode == 'default':
+                            expected = 0  # Default mode retains missing metadata as warnings.
+                        self.assertEqual(result.returncode, expected, result.stdout.decode() + result.stderr.decode())
+                        record = json.loads(target.read_bytes())
+                        findings = record['complete_findings']
+                        if refusal:
+                            self.assertTrue(any(refusal in row['message'] for row in findings), findings)
+                        else:
+                            self.assertFalse(any('duplicate requirement title' in row['message'] for row in findings), findings)
+                        if case == 'legacy-fresh':
+                            self.assertTrue(any("'Visible Evidence' missing ID" in row['message'] and row['path'] == str(canonical) for row in findings))
+                            self.assertTrue(any('has no test citation' in row['message'] and row['path'] == str(owned) for row in findings))
+                        if mode == 'affected':
+                            receipt = record['affected_receipt']
+                            self.assertEqual(receipt['verdict'], 'NONPASS' if refusal else 'PASS')
+                            if refusal:
+                                self.assertTrue(receipt['owned_errors'] or receipt['nonregression_faults'])
+                            if case == 'legacy-fresh':
+                                self.assertEqual(receipt['full_baseline_verdict'], 'NONPASS')
+                                self.assertEqual(receipt['full_union_verdict'], 'NONPASS')
+                                self.assertEqual(len(receipt['owned_future_coverage_warnings']), 1)
+                                self.assertEqual(receipt['nonregression_faults'], [])
+                            if case == 'duplicate-canonical-baseline':
+                                self.assertTrue(any('duplicate requirement title' in row['message'] and row['path'] == str(canonical) for row in receipt['baseline_findings']))
+                                self.assertTrue(any('duplicate requirement title' in row['message'] and row['path'] == str(owned) for row in receipt['owned_errors']))
+                            if case.startswith('foreign-'):
+                                self.assertTrue(any('duplicate requirement title' in row['message'] and row['path'] == str(foreign) for row in receipt['baseline_findings']))
+                                self.assertTrue(any('duplicate requirement title' in row['message'] and row['path'] == str(owned) for row in receipt['owned_errors']))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -336,15 +336,25 @@ def normalize_test_id(raw: str) -> str:
 def check_requirement_names(reqs, f):
     seen = {}
     restated = set()
+    id_counts = collections.Counter(r.req_id for r in reqs if r.req_id)
+    canonical_counts = collections.Counter((r.spec_name, r.title) for r in reqs if r.op == "Requirements")
+    active_counts = collections.Counter((r.spec_name, r.title) for r in reqs if r.op != "Requirements")
     for r in reqs:
         key = (r.spec_name, r.title)
         previous = seen.get(key)
         if previous is None:
             seen[key] = r
             continue
-        allowed = (previous.op == "Requirements" and
-                   r.op in {"MODIFIED Requirements", "REMOVED Requirements"} and
-                   previous.req_id and previous.req_id == r.req_id and key not in restated)
+        same_id = (r.op in {"MODIFIED Requirements", "REMOVED Requirements"} and
+                   previous.req_id and previous.req_id == r.req_id)
+        # An ID-less canonical needs an unambiguous predecessor and sole writer.
+        successor_id = ID_FORMAT_RE.match(r.req_id or "")
+        legacy_backfill = (previous.req_id is None and r.op == "MODIFIED Requirements" and
+                           successor_id and successor_id.group(1) == r.spec_name and
+                           id_counts[r.req_id] == 1 and canonical_counts[key] == 1 and
+                           active_counts[key] == 1)
+        allowed = (previous.op == "Requirements" and key not in restated and
+                   (same_id or legacy_backfill))
         if allowed:
             restated.add(key)
         else:

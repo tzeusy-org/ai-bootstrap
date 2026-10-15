@@ -243,6 +243,15 @@ opportunistically: any edit that touches a requirement restores the canonical
 order and adds its fields in the same change. New requirements always use the
 canonical order and carry all three fields.
 
+An ID-less canonical requirement may acquire a valid unused qualified ID through
+one complete exact-title `MODIFIED` successor. Its capability/title must identify
+exactly one canonical requirement and one active writer across all operations,
+including writers with missing or invalid IDs. The new ID must be unique across
+all main and active requirements. Established IDs remain permanent; this does not
+extend legacy backfill to `REMOVED`, `RENAMED`, or same-title `ADDED` requirements.
+The unchanged canonical's missing-field findings remain visible, as do all other
+metadata, scenario, collision, and source-admission checks.
+
 ## Qualified Proposal Admission
 
 The full checker keeps its actual full-tree PASS/NONPASS and complete findings.
