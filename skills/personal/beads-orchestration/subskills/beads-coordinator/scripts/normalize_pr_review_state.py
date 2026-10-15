@@ -25,8 +25,11 @@ fails:
 - PR metadata: any resolved PR number without a valid `gh pr view` record; the
   sole exception is a lone, otherwise complete `command-failed` lookup, reported
   only as a no-action `skip-command-failure` finding
-- discovery: any `gh pr list` / candidate-source lookup failure (open-PR
-  discovery is collection evidence, not a post-selection best effort)
+- discovery: missing or invalid authoritative `bd config get issue_prefix`, or
+  any `gh pr list` / in-prefix candidate-source lookup failure (open-PR
+  discovery is collection evidence, not a post-selection best effort);
+  only `agent/<issue_prefix>-...` branches infer issues, and malformed
+  in-prefix identities remain collection failures
 - relations: `review_relation_graph.review_relation_error` rejects malformed
   entries, self-links, duplicate review-ID left sides, a review ID reused in the
   original role, and reciprocal/longer cycles (`cyclic-review-relation`);
@@ -51,6 +54,7 @@ from review_relation_graph import review_relation_error
 SCHEMA = "beads-pr-review-normalization/v1"
 COOLDOWN = timedelta(minutes=5)
 BEAD_ID_RE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)+(?:\.[0-9]+)*\Z")
+ISSUE_PREFIX_RE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
 SAFE_CODE_RE = re.compile(r"[a-z0-9][a-z0-9-]*\Z")
 PR_STATES = frozenset({"OPEN", "CLOSED", "MERGED"})
 BEAD_STATUSES = frozenset({"open", "in_progress", "blocked", "closed"})
@@ -395,6 +399,23 @@ def self_heal_candidates(
     errors: list[dict[str, str]],
 ) -> tuple[list[dict[str, Any]], bool]:
     """Discover open-PR candidates and report whether their evidence is complete."""
+    prefix_payload, prefix_error = command_json(
+        ["bd", "-C", str(repo_root), "config", "get", "issue_prefix", "--json"],
+        repo_root,
+    )
+    if prefix_error:
+        report_error(errors, prefix_error, "issue-prefix")
+        return [], False
+    prefix = prefix_payload.get("value") if isinstance(prefix_payload, dict) else None
+    if (
+        not isinstance(prefix_payload, dict)
+        or prefix_payload.get("key") != "issue_prefix"
+        or not isinstance(prefix, str)
+        or not ISSUE_PREFIX_RE.fullmatch(prefix)
+    ):
+        report_error(errors, "invalid-issue-prefix", "issue-prefix")
+        return [], False
+
     payload, error = command_json(
         ["gh", "pr", "list", "--state", "open", "--json", "number,headRefName,createdAt"],
         repo_root,
@@ -418,7 +439,11 @@ def self_heal_candidates(
         if not isinstance(branch, str) or not branch.startswith("agent/"):
             continue
         original_id = branch.removeprefix("agent/")
+        if not original_id.startswith(f"{prefix}-"):
+            continue
         if not BEAD_ID_RE.fullmatch(original_id):
+            report_error(errors, "invalid-record", "open-prs")
+            discovery_complete = False
             continue
         if not valid_pr_number(number):
             report_error(errors, "invalid-pr-number", "open-prs")

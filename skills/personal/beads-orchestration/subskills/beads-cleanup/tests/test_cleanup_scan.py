@@ -70,6 +70,10 @@ def install_fakes(fake_bin: FakeBinDir) -> None:
                 print(message, file=sys.stderr)
                 raise SystemExit(1)
 
+        if argv == ["config", "get", "issue_prefix", "--json"]:
+            print(json.dumps({"key": "issue_prefix", "value": "aib"}))
+            raise SystemExit(0)
+
         if argv[:2] == ["dep", "list"]:
             issue_id = argv[2]
             fail(f"bd-dep:{issue_id}")
@@ -286,6 +290,8 @@ class CleanupScanTests(unittest.TestCase):
 
                 if "list" in sys.argv:
                     print(json.dumps([]))
+                elif "config" in sys.argv:
+                    print(json.dumps({"key": "issue_prefix", "value": "aib"}))
                 elif "worktree" in sys.argv:
                     print("")
                 else:
@@ -1695,6 +1701,7 @@ class CleanupScanTests(unittest.TestCase):
                 ],
             },
             {"tool": "gh", "argv": ["pr", "view", "41", "--json", "number,state,mergedAt,createdAt"]},
+            {"tool": "bd", "argv": ["-C", repo_root, "config", "get", "issue_prefix", "--json"]},
             {"tool": "gh", "argv": ["pr", "list", "--state", "open", "--json", "number,headRefName,createdAt"]},
             {"tool": "bd", "argv": ["-C", repo_root, "list", "--status=in_progress", "--json", "--limit", "0"]},
             {"tool": "bd", "argv": ["-C", repo_root, "list", "--status=blocked", "--json", "--limit", "0"]},
