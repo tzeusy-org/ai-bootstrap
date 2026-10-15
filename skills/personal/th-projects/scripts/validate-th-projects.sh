@@ -547,6 +547,15 @@ else
   fi
 fi
 
+# Affected-authoring behavior regressions; full original fixture loop above remains.
+rc=0
+out=$(uv run "$ROOT/tests/test_spec_trace_affected.py" 2>&1) || rc=$?
+if [[ $rc -eq 0 ]]; then
+  _pass "spec-trace: contextual grounding and complete affected admission regressions"
+else
+  _fail "spec-trace: affected admission regressions failed (exit $rc): $out"
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "=================================================="
