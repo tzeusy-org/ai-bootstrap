@@ -413,6 +413,61 @@ else
   fi
 
   rc=0
+  out=$(uv run "$TRACE_SCRIPT" "$TRACE_FIXTURES/new-capability-purpose" --authoring 2>&1) || rc=$?
+  if [[ $rc -eq 0 ]]; then
+    _pass "spec-trace: new-capability Purpose passes authoring"
+  else
+    _fail "spec-trace: supported new-capability Purpose failed (exit $rc): $out"
+  fi
+
+  # Mutate one canonical fixture at the real CLI seam. Purpose must not hide
+  # unknown headings or requirement failures, or replace a canonical Purpose.
+  purpose_tmp=$(mktemp -d)
+  trap 'rm -rf "$purpose_tmp"' EXIT
+  for mutation in unknown-heading missing-id invalid-scope missing-then purpose-requirement existing-capability; do
+    probe="$purpose_tmp/$mutation"
+    cp -R "$TRACE_FIXTURES/new-capability-purpose" "$probe"
+    delta="$probe/openspec/changes/add-worker/specs/core-worker/spec.md"
+    case "$mutation" in
+      unknown-heading)
+        printf '\n## Notes\nUnsupported section.\n' >>"$delta"
+        expected='unsupported delta-spec H2'
+        ;;
+      missing-id)
+        sed -i '/^ID:/d' "$delta"
+        expected='missing ID'
+        ;;
+      invalid-scope)
+        sed -i 's/^Scope: .*/Scope: invalid/' "$delta"
+        expected='invalid Scope value'
+        ;;
+      missing-then)
+        sed -i '/^- \*\*THEN\*\*/d' "$delta"
+        expected='1 WHEN and 1 THEN'
+        ;;
+      purpose-requirement)
+        sed -i '/^## ADDED Requirements$/d' "$delta"
+        expected='delta requirement must follow a delta-operation heading'
+        ;;
+      existing-capability)
+        mkdir -p "$probe/openspec/specs/core-worker"
+        sed 's/^## ADDED Requirements$/## Requirements/' "$delta" >"$probe/openspec/specs/core-worker/spec.md"
+        sed -i 's/^## ADDED Requirements$/## MODIFIED Requirements/' "$delta"
+        expected="delta spec uses main-spec heading '## Purpose'"
+        ;;
+    esac
+    rc=0
+    out=$(uv run "$TRACE_SCRIPT" "$probe" --authoring 2>&1) || rc=$?
+    if [[ $rc -eq 1 ]] && grep -q "$expected" <<<"$out"; then
+      _pass "spec-trace: Purpose preserves $mutation refusal"
+    else
+      _fail "spec-trace: Purpose lost $mutation refusal (exit $rc): $out"
+    fi
+  done
+  rm -rf "$purpose_tmp"
+  trap - EXIT
+
+  rc=0
   out=$(uv run "$TRACE_SCRIPT" "$TRACE_FIXTURES/ordering-violations" 2>&1) || rc=$?
   if [[ $rc -ne 1 ]]; then
     _fail "spec-trace: ordering violations fixture expected exit 1, got $rc"

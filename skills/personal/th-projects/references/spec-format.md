@@ -31,7 +31,7 @@ Not defined here:
 | Kind | Location | H2 headings | Written when |
 |------|----------|-------------|--------------|
 | **Main spec** | `openspec/specs/{spec-name}/spec.md` | `## Purpose`, `## Requirements` | Bookkeeping observed behavior (reconciliation R4); `openspec archive` syncing a finished change |
-| **Delta spec** | `openspec/changes/{change}/specs/{spec-name}/spec.md` | `## ADDED Requirements`, `## MODIFIED Requirements`, `## REMOVED Requirements`, `## RENAMED Requirements` | Proposing future behavior (feature funnel Gate 5, direction Phase 2) |
+| **Delta spec** | `openspec/changes/{change}/specs/{spec-name}/spec.md` | `## ADDED Requirements`, `## MODIFIED Requirements`, `## REMOVED Requirements`, `## RENAMED Requirements`; optional `## Purpose` for a new capability without a canonical main spec | Proposing future behavior (feature funnel Gate 5, direction Phase 2) |
 
 Authoritative routing rule:
 
@@ -74,8 +74,13 @@ Scope: v1-mandatory
 - **AND** {additional outcome if applicable}
 ```
 
-Delta spec: identical requirement/scenario blocks under the delta-operation
-H2s instead of `## Requirements`, and no `## Purpose` section.
+Delta spec: identical requirement/scenario blocks under `## ADDED Requirements`,
+`## MODIFIED Requirements`, `## REMOVED Requirements`, or `## RENAMED Requirements`
+instead of `## Requirements`. A new capability without a canonical main spec may
+include an authored `## Purpose` before its operation sections: OpenSpec 1.9
+carries that prose into the new main spec on archive instead of writing a TBD
+purpose. Requirements still belong under delta-operation headings. A delta does
+not replace an existing canonical Purpose; edit the main spec directly to change it.
 
 ## Requirement Block Ordering
 
@@ -126,7 +131,7 @@ add a source-grep test beside a behavior test for the same requirement.
 ## Heading Hierarchy
 
 - H1: Main spec title (one per file)
-- H2: `Purpose` + `Requirements` (main) / delta-operation headings (delta)
+- H2: `Purpose` + `Requirements` (main) / delta-operation headings, with optional `Purpose` for a new capability only (delta)
 - H3: Requirement (e.g., `### Requirement: Configuration Loading`)
 - H4: Scenario (e.g., `#### Scenario: Valid config loads successfully`)
 
