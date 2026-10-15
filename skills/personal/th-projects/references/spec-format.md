@@ -30,8 +30,8 @@ Not defined here:
 
 | Kind | Location | H2 headings | Written when |
 |------|----------|-------------|--------------|
-| **Main spec** | `openspec/specs/{spec-name}/spec.md` | `## Purpose`, `## Requirements` | Bookkeeping observed behavior (reconciliation R4); `openspec archive` syncing a finished change |
-| **Delta spec** | `openspec/changes/{change}/specs/{spec-name}/spec.md` | `## ADDED Requirements`, `## MODIFIED Requirements`, `## REMOVED Requirements`, `## RENAMED Requirements`; optional `## Purpose` for a new capability without a canonical main spec | Proposing future behavior (feature funnel Gate 5, direction Phase 2) |
+| **Main spec** | `openspec/specs/{spec-name}/spec.md` | `## Purpose`, `## Requirements`, optional final `## Source References` | Bookkeeping observed behavior (reconciliation R4); `openspec archive` syncing a finished change |
+| **Delta spec** | `openspec/changes/{change}/specs/{spec-name}/spec.md` | `## ADDED Requirements`, `## MODIFIED Requirements`, `## REMOVED Requirements`, `## RENAMED Requirements`; initial `## Purpose` only for a genuinely new capability, final `## Source References` when required by repository | Proposing future behavior (feature funnel Gate 5, direction Phase 2) |
 
 Authoritative routing rule:
 
@@ -76,11 +76,17 @@ Scope: v1-mandatory
 
 Delta spec: identical requirement/scenario blocks under `## ADDED Requirements`,
 `## MODIFIED Requirements`, `## REMOVED Requirements`, or `## RENAMED Requirements`
-instead of `## Requirements`. A new capability without a canonical main spec may
-include an authored `## Purpose` before its operation sections: OpenSpec 1.9
-carries that prose into the new main spec on archive instead of writing a TBD
-purpose. Requirements still belong under delta-operation headings. A delta does
-not replace an existing canonical Purpose; edit the main spec directly to change it.
+instead of `## Requirements`. A genuinely new capability (no actual
+`openspec/specs/{spec-name}/spec.md` baseline) requires one initial `## Purpose`
+with at least 50 characters before operations, matching the installed spec-driven
+schema. OpenSpec 1.9 carries that authored prose into the new main spec on archive
+instead of writing a TBD purpose. Requirements remain under delta-operation
+headings. A delta for an existing capability refuses `## Purpose` and does not
+replace its canonical Purpose; edit the main spec directly to change it.
+A final `## Source References` is a non-operative grounding section: exactly one,
+non-empty when present, no requirement/scenario bodies, and no later H2. Where
+repository instructions require it, every affected spec must contain it. This
+syntax check does not certify semantic applicability of a cited doctrine/RFC.
 
 ## Requirement Block Ordering
 
@@ -131,7 +137,7 @@ add a source-grep test beside a behavior test for the same requirement.
 ## Heading Hierarchy
 
 - H1: Main spec title (one per file)
-- H2: `Purpose` + `Requirements` (main) / delta-operation headings, with optional `Purpose` for a new capability only (delta)
+- H2: `Purpose` + `Requirements` (main) / delta-operation headings (delta), with the narrowly defined new-capability Purpose and final Source References sections above
 - H3: Requirement (e.g., `### Requirement: Configuration Loading`)
 - H4: Scenario (e.g., `#### Scenario: Valid config loads successfully`)
 
@@ -236,3 +242,79 @@ an error because OpenSpec cannot parse metadata-first requirements. Backfill
 opportunistically: any edit that touches a requirement restores the canonical
 order and adds its fields in the same change. New requirements always use the
 canonical order and carry all three fields.
+
+## Qualified Proposal Admission
+
+The full checker keeps its actual full-tree PASS/NONPASS and complete findings.
+Only an explicit repository/coordinator stage allocation may use the separately
+named affected-authoring-and-full-diagnostic-nonregression receipt to prepare a
+proposal while unrelated baseline findings remain open. It is not full authoring
+PASS, implementation signoff, semantic review, hosted CI or merge permission.
+
+`--authoring --affected-change NAME --baseline-ref SHA --findings-json EXTERNAL`
+checks every complete spec in that change, mandatory repository grounding, all
+current main/active ID and capability/title collisions (including findings on the
+other side), and all full-tree diagnostic additions against the independently
+captured native baseline parsed by the same checker. It refuses an empty change,
+missing or invalid baseline, changed spec outside that change, changed/untracked
+citation source, unknown headings, missing fields, malformed IDs, unsupported
+restatements and invalid scenario counts. It does not edit baseline source.
+
+Each view captures raw bytes once for each canonical and non-archived active
+`spec.md` and each discovered citation test. Native membership comes from the
+complete native Git tree, independently of the dirty filesystem. Automatic test
+roots are all directories named `test` or `tests` at relative depth at most three,
+excluding roots with `.git` or `node_modules` ancestors. Within each root the
+ordinary supported suffix/name-hint policy selects the complete recursive test
+body population. Every root, including a root with no selected test bodies, and
+its selected body membership is recorded. Native and dirty roots, selected test
+paths, exact raw SHA256s and file modes must agree. Deletion, rename outside
+discovery, untracked test additions and lost or added roots refuse. Affected-mode
+`--tests-dir` overrides must exactly name the entire automatic root set in both
+views; missing, subset, alternative and escaping roots refuse. Ordinary full-mode
+valid relative root selection remains configurable and missing roots still warn.
+This bounded discovery policy is explicit, not a claim to scan every possible
+project test convention; any other root policy needs separate reviewed allocation.
+
+Root-policy entries are inspected before supported-directory filtering. Every
+native name/depth/ancestor-policy match must be a mode040000 tree; a root-itself
+gitlink160000, symlink120000 or other non-directory entry refuses even when the
+working path is absent. Current discovery inspects directory and filename
+populations with no-follow stat, so dangling root links cannot vanish. Explicit
+ordinary configured roots also refuse symlink/non-directory forms while valid
+relative directories and missing-root warnings retain their ordinary meaning.
+Gitlinks and symlink entries below admitted citation roots refuse independently
+of suffix/name hints; opaque descendants cannot hide a directory's source behind
+a non-test filename. Excluded .git/node_modules ancestors and the existing depth
+bound remain explicit. A genuinely absent native/current test population remains
+normal no-test authoring; unsupported root forms are never equivalent to absence.
+
+Parsing and hashing use the same captured raw bytes with strict UTF-8 decoding.
+No universal-newline translation or replacement decoding supplies custody. LF and
+CRLF are distinct raw identities: an outside newline-only change refuses, while
+unchanged CRLF baseline source is preserved. Parsed line splitting is a semantic
+interpretation only; it never replaces the raw source identity. Malformed UTF-8,
+nonregular or symlink sources and unsupported native submodule citation roots
+refuse, rather than silently disappearing from a supposedly complete scan.
+
+Every complete baseline/current diagnostic occurrence, addition, removal and
+raw source/test digest stays in the receipt. Known baseline errors remain visible.
+Test coverage closeout remains the separate `--strict` contract. Affected-path
+future-coverage warnings remain warnings under `--authoring`, matching its
+existing no-implementation-tests-yet contract, and are explicitly enumerated
+among all additions. They are never suppressed or converted to full-tree PASS.
+All new errors and other new warnings are non-regression failures. Original
+full-tree old-tool raw evidence and foreign remediation ownership stay required;
+new syntax support may resolve old syntax findings, so actual same-new-checker
+native baseline/current comparison supplies the fresh non-regression evidence.
+
+Receipt finalization serializes the complete proposed payload first, then repeats
+native baseline resolution and full spec/test population/raw capture. It verifies
+that immutable SHA and population against the admitted baseline, recaptures the
+full dirty spec/test roots, membership, raw digests and modes, and checks the raw
+checker digest. These are the final source observations immediately before the
+external receipt write. Mutations during native reads or serialization refuse.
+A new CLI receipt path must be absent; a refused attempt cannot overwrite or
+reuse a stale output. Timeouts, partial output, failed capture or missing receipt
+are non-passes. This is a finite observation, not a filesystem lock, atomic
+cross-file snapshot or a promise of continuous identity after the observation.
