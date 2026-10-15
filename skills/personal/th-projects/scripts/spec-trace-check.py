@@ -84,7 +84,8 @@ class Findings:
         self.warnings.append(f"WARN   {path}:{line}: {msg}")
 
 
-def parse_spec(path: Path, spec_name: str, is_delta: bool, f: Findings) -> list:
+def parse_spec(path: Path, spec_name: str, is_delta: bool, f: Findings,
+               *, allow_delta_purpose: bool = False) -> list:
     """Parse one spec.md; emit structural findings; return requirements."""
     rel = path
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -110,6 +111,8 @@ def parse_spec(path: Path, spec_name: str, is_delta: bool, f: Findings) -> list:
             h2 = m2.group(1).strip()
             cur_op = h2
             allowed = DELTA_H2 if is_delta else MAIN_H2
+            if is_delta and allow_delta_purpose:
+                allowed = allowed | {"Purpose"}
             if h2 not in allowed:
                 if is_delta and h2 in MAIN_H2:
                     msg = f"delta spec uses main-spec heading '## {h2}'"
@@ -124,6 +127,8 @@ def parse_spec(path: Path, spec_name: str, is_delta: bool, f: Findings) -> list:
         m3 = re.match(r"^### Requirement:\s*(.+)$", line)
         if m3:
             close_scenario()
+            if is_delta and cur_op == "Purpose":
+                f.error(rel, i, "delta requirement must follow a delta-operation heading, not '## Purpose'")
             cur = Requirement(title=m3.group(1).strip(), spec_name=spec_name,
                               file=path, line=i, op=cur_op or "?")
             block_end = len(lines)
@@ -305,7 +310,11 @@ def main() -> int:
     for spec in sorted(openspec.glob("changes/*/specs/*/spec.md")):
         if "archive" in spec.relative_to(openspec).parts:
             continue
-        parsed = parse_spec(spec, spec.parent.name, is_delta=True, f=f)
+        # OpenSpec 1.9 carries Purpose into a new main spec; it does not update
+        # an existing canonical Purpose through a delta.
+        canonical = openspec / "specs" / spec.parent.name / "spec.md"
+        parsed = parse_spec(spec, spec.parent.name, is_delta=True, f=f,
+                            allow_delta_purpose=not canonical.exists())
         if (args.authoring or args.strict) and not parsed:
             f.error(spec, 1, "spec file has no requirements")
         reqs += parsed
