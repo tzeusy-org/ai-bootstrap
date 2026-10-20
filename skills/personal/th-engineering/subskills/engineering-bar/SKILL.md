@@ -98,8 +98,10 @@ biases apply:
 10. **Prefer greenfield parity over inherited shape** — The code should look
     as if written once, today, from the current spec. Complexity the spec
     does not need is residue regardless of how it arrived; a constraint that
-    justifies it gets written down so it stops looking like residue. Without
-    an external consumer, compatibility is not such a constraint.
+    justifies it gets written down so it stops looking like residue.
+    Compatibility is such a constraint only under bias 1's sole exception
+    (a verified external consumer), and interfaces are kept narrow so that
+    exception stays rare.
     ([greenfield-parity](../greenfield-parity/SKILL.md) operationalizes
     this, including re-runnable audits.)
 

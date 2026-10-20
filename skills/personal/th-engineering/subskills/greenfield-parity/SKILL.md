@@ -59,17 +59,28 @@ erode the backlog faster than they improve the code.
 2. **Excess is justified or it is residue.** Justified means a named
    constraint, written into spec or doctrine in the same change; otherwise
    the finding's target state is the sketch's counterpart, often "nothing".
-3. **No external consumer, no compatibility debt.** Then the target is the
-   sketch itself, and a rewrite-to-target is one finding when incremental
+3. **Compatibility has one exception.** Residue stays only for a verified
+   external consumer that cannot be updated in the same change, under an
+   owned, dated removal plan
+   ([compat-boundary](../cruft-cleanup/references/compat-boundary.md));
+   it enters the delta as `justified`, time-bounded. Same-repo callers and
+   private APIs never qualify. Absent the exception, the target is the
+   sketch itself and a rewrite-to-target is one finding when incremental
    removal would cost more.
-4. **Reconcile before you create.** A duplicate bead costs a worker a
+4. **Interfaces are where parity is enforced.** Residue behind a narrow
+   interface is cheap to delete later; residue in an exported surface
+   becomes tomorrow's compatibility exception. The sketch is
+   interface-first — boundaries, what crosses each, deep modules behind
+   small surfaces — and an interface finding outranks an internal one of
+   the same class.
+5. **Reconcile before you create.** A duplicate bead costs a worker a
    full session, so match every finding against the already-known ledger
    (open, in-progress, recently closed beads; prior reports) and land it as
    attach / supersede / reopen / close / new. `new` is the last resort.
-5. **Convergence is done.** The report records head SHA and
+6. **Convergence is done.** The report records head SHA and
    new/attached/closed counts so the next run diffs instead of restarting;
    a run on the remediated head filing nothing new closes the loop.
-6. **Fix-it-now inside a change.** Applied during implementation rather
+7. **Fix-it-now inside a change.** Applied during implementation rather
    than an audit, leaf residue inside the change's scope is removed in that
    change; only what exceeds the scope is filed (router invariant).
 
@@ -77,7 +88,7 @@ erode the backlog faster than they improve the code.
 
 | File | Read when | Content |
 |---|---|---|
-| [`references/delta-workflow.md`](./references/delta-workflow.md) | Judging complexity against the spec | Spec statement → sketch → inventory → delta table; residue classes; finding contract; rewrite rule |
+| [`references/delta-workflow.md`](./references/delta-workflow.md) | Judging complexity against the spec | Spec statement → interface-first sketch → inventory → delta table; residue classes; compat-exception path; finding contract; rewrite rule |
 | [`references/idempotent-audit.md`](./references/idempotent-audit.md) | Filing findings as beads | Ledger, reconciliation states, audit-key, progressive ordering, convergence record |
 
 [`scripts/ledger.sh`](./scripts/ledger.sh) `[repo_root] [closed_limit]`

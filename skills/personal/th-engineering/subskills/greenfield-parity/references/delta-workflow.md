@@ -9,16 +9,27 @@ A few lines: goal, hard requirements, real constraints (platform, data
 volume, integrations, team size). Sources in order: `about/heart-and-soul/`
 + `openspec/` → README → manifests/tests → inference. Label lines
 `[Observed]` / `[Inferred]`; an inferred spec is still the baseline — say so,
-since vagueness here becomes vagueness in every finding. State the
-production status: no external consumer → compatibility never justifies
-excess below.
+since vagueness here becomes vagueness in every finding. List verified
+external consumers (published API, package, service another repo calls):
+they are the only source of compatibility constraints below; same-repo
+callers and private APIs never count
+([compat-boundary](../../cruft-cleanup/references/compat-boundary.md)).
 
 ## Step 1 — Greenfield sketch (before reading implementation)
 
-Inputs: spec statement, manifests, top-level layout only. Write:
+Inputs: spec statement, manifests, top-level layout only. Interfaces
+first — they are what consumers bind to and what a later cleanup cannot
+touch freely:
 
-- Modules, one responsibility line each
-- Interfaces between modules: what crosses each boundary
+- Boundaries: which interfaces are externally consumed, which exported
+  in-repo, which internal; for each, what crosses it, kept narrow and
+  explicit (the interface is the test surface)
+- Modules behind them, deep: small surface relative to the work hidden
+  ([seams-and-dependencies](../../dependency-hygiene/references/seams-and-dependencies.md)
+  deletion test); one adapter is a hypothetical seam, not a layer
+- Contract-level semantics each externally consumed interface must state
+  (side effects, idempotency, failure —
+  [interface-semantics](../../documentation/references/interface-semantics.md))
 - External dependencies a from-scratch build takes, and why
 - Order-of-magnitude size: files/LOC per module, test shape
 - Build/tooling surface: commands and what each gates
@@ -50,12 +61,15 @@ One row per actual component (module, layer, dependency, tool):
 |---|---|---|---|---|
 
 Verdicts: `parity` (1:1) · `justified` (sketch missed a real constraint —
-name it) · `residue` (nothing in the spec needs it) · `gap` (sketch has it,
-code doesn't — route to spec/direction, not filed here).
+name it; a compatibility constraint is valid only as `compat: <consumer>,
+<owner>, <removal date>`) · `residue` (nothing in the spec needs it) ·
+`gap` (sketch has it, code doesn't — route to spec/direction, not filed
+here).
 
 | Residue class | Tell |
 |---|---|
 | history | shim, completed migration, "legacy" comment, two paths for one behavior |
+| interface sprawl | exports beyond the contract; internals reachable by consumers; parameters or flags kept for one caller's old shape; a surface too wide to ever deprecate |
 | speculative generality | interface/base/generic/plugin point with one implementation; knob with one value ever set |
 | duplicated concept | two names or modules for one domain idea; parallel helpers that drifted |
 | layer inflation | pass-through that renames and forwards; service → manager → handler chains |
@@ -70,6 +84,12 @@ code doesn't — route to spec/direction, not filed here).
 into spec/doctrine in the same change, or the row becomes `residue`.
 `residue` → target state is the sketch's counterpart.
 
+Compatibility path: residue an externally consumed interface still serves
+is not deleted — it becomes `justified (compat: …)` and files a
+deprecation pair: a deprecation bead (consumer, owner, migration) and a
+dated removal bead depending on it, so the exception cannot become
+permanent. Residue that only same-repo callers use takes the normal path.
+
 Rewrite vs. incremental: when one surface's residue rows outweigh its parity
 rows, or removing them one by one re-touches the same files, file one
 rewrite-to-target finding instead of N removals. Name the rule that fired;
@@ -81,6 +101,9 @@ Each finding, for a cold reader:
 
 - `file:line` or module path, residue class
 - Greenfield counterpart it becomes, quoted from the sketch
+- Exposure: `internal` · `exported` · `externally consumed` — exported
+  outranks internal of the same class; externally consumed takes the
+  compatibility path
 - Blast radius: callers, tests, docs touched
 - Removal complexity `low` (delete + fix callers) · `medium` (reshape a
   boundary) · `high` (rewrite a surface) — maps straight to the bead label

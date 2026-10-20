@@ -48,11 +48,17 @@ File in an order workers land without re-touching earlier work; wire
 
 1. Constraint write-downs (spec/doctrine edits for `justified` rows) — no
    code dependency, can run first
-2. Leaf residue, `complexity:low` — narration, defensive excess, dead
+2. Interface narrowing — shrink exported surfaces to their contract first;
+   everything behind a narrowed surface is then internal and freely
+   removable, and nothing new leaks out while the rest lands
+3. Leaf residue, `complexity:low` — narration, defensive excess, dead
    tooling, single-caller scripts
-3. Boundary reshapes, `complexity:medium` — collapse a pass-through, merge
+4. Boundary reshapes, `complexity:medium` — collapse a pass-through, merge
    duplicated concepts, drop one-implementation abstractions
-4. Surface rewrites, `complexity:high` / `epic` — only where the rewrite
+5. Deprecation pairs for externally consumed residue — deprecation bead
+   (consumer, owner, migration) then the dated removal bead depending on
+   it; audit-key class `compat`
+6. Surface rewrites, `complexity:high` / `epic` — only where the rewrite
    rule fired; the bead says why incremental lost and names the model tier
 
 An epic groups 3–7 and ends with beads-writer's reconciliation bead, whose
