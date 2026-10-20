@@ -25,6 +25,11 @@ Inputs: spec statement, manifests, top-level layout only. Write:
 
 Time-box it. Record verbatim in the report — every delta finding cites it.
 
+Delegation: the sketch may go to a fresh-context subagent (independence);
+a repo-wide inventory may go out when it would flood the session (context
+isolation). Classification and the delta table stay inline — one warm
+session reading the sketch beats N cold ones re-deriving it.
+
 ## Step 2 — Inventory the actual
 
 ```bash

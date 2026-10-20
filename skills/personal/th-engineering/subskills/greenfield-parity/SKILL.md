@@ -14,6 +14,7 @@ metadata:
     - Claude Fable 5.1
   status: active
   last_reviewed: "2026-10-21"
+compatibility: idempotent-audit requires the bd CLI, jq, and a Beads-backed repository; the delta workflow needs none.
 ---
 
 # Greenfield Parity
@@ -61,13 +62,16 @@ erode the backlog faster than they improve the code.
 3. **No external consumer, no compatibility debt.** Then the target is the
    sketch itself, and a rewrite-to-target is one finding when incremental
    removal would cost more.
-4. **Reconcile before you create.** Match every finding against the
-   already-known ledger (open, in-progress, recently closed beads; prior
-   reports); land it as attach / supersede / reopen / close / new. `new` is
-   the last resort.
+4. **Reconcile before you create.** A duplicate bead costs a worker a
+   full session, so match every finding against the already-known ledger
+   (open, in-progress, recently closed beads; prior reports) and land it as
+   attach / supersede / reopen / close / new. `new` is the last resort.
 5. **Convergence is done.** The report records head SHA and
-   new/attached/closed counts so the next run diffs; a run on the remediated
-   head filing nothing new closes the loop.
+   new/attached/closed counts so the next run diffs instead of restarting;
+   a run on the remediated head filing nothing new closes the loop.
+6. **Fix-it-now inside a change.** Applied during implementation rather
+   than an audit, leaf residue inside the change's scope is removed in that
+   change; only what exceeds the scope is filed (router invariant).
 
 ## Read Order
 
@@ -76,8 +80,24 @@ erode the backlog faster than they improve the code.
 | [`references/delta-workflow.md`](./references/delta-workflow.md) | Judging complexity against the spec | Spec statement → sketch → inventory → delta table; residue classes; finding contract; rewrite rule |
 | [`references/idempotent-audit.md`](./references/idempotent-audit.md) | Filing findings as beads | Ledger, reconciliation states, audit-key, progressive ordering, convergence record |
 
-Bead form (fields, complexity labels, work-allocation) stays beads-writer's
-contract; this skill adds only dedupe and ordering.
+[`scripts/ledger.sh`](./scripts/ledger.sh) `[repo_root] [closed_limit]`
+builds the already-known ledger (open/in-progress, recently closed,
+audit-keyed beads, prior packets, last convergence record); run it before
+any reconciliation. Bead form (fields, complexity labels, work-allocation)
+stays beads-writer's contract; this skill adds only dedupe and ordering.
+
+## Stops
+
+- Step order is the point: no implementation reading before the sketch is
+  recorded. A sketch written after is not a baseline.
+- `close` and `reopen` need file-level evidence at the audited SHA, never
+  inference from the report; a bead another assignee holds `in_progress`
+  gets a note, not a state change.
+- A rewrite-to-target on a surface with a verified external consumer, or any
+  trust-boundary, migration, or concurrency-model change, is a scope
+  change: it returns to `/th-projects` at the governing spec/allocation gate
+  (`beads-orchestration/references/decision-autonomy.md`), not a bead filed
+  silently.
 
 ## Trigger Sanity Check
 

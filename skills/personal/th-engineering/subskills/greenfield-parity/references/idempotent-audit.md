@@ -8,12 +8,7 @@ keeps re-runs convergent.
 ## Already-known ledger (before writing any finding)
 
 ```bash
-# open + in-progress
-bd list --json | jq -r '.[] | select(.status != "closed") | "\(.id) \(.status) [\((.labels // []) | join(","))] \(.title)"'
-# recently closed
-bd list --status closed --json | jq -r '.[] | "\(.id) \(.closed_at // "") \(.title)"' | sort -k2 -r | head -40
-# prior reports and their convergence records
-ls docs/reviews/ 2>/dev/null
+bash <this-skill>/scripts/ledger.sh <repo_root>   # open/in-progress, recently closed, audit-keyed, prior packets, last convergence record
 ```
 
 Inject the ledger verbatim into every reviewer prompt as "known — report
@@ -43,9 +38,8 @@ Design field of every audit-derived bead:
 Audit-key: greenfield:<residue-class>:<primary path>
 ```
 
-e.g. `greenfield:layer-inflation:src/api/handlers/`. Next run greps
-`bd search "Audit-key: greenfield:"` and matches class + path before title
-similarity. Keys name the surface, not the line, so they survive moves.
+e.g. `greenfield:layer-inflation:src/api/handlers/`. `ledger.sh` lists
+every audit-keyed bead; match class + path before title similarity. Keys name the surface, not the line, so they survive moves.
 
 ## Progressive ordering
 
