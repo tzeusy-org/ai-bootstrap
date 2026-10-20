@@ -41,6 +41,11 @@ Every bead must be a self-contained handoff for a future independent session. Su
 - End every epic with a terminal reconciliation bead that depends on all implementation children.
 - Use `bd create`, not `bd q`, when you need a real description.
 - Do not pass dependency flags to `bd create`; create first, then wire with `bd dep add`.
+- Reconcile against the existing backlog before creating: `bd search` the
+  surface and title terms; attach, supersede, or reopen an existing bead
+  before filing a new one. Audit-derived batches follow
+  [`th-engineering/subskills/greenfield-parity/references/idempotent-audit.md`](../../../th-engineering/subskills/greenfield-parity/references/idempotent-audit.md)
+  (ledger, audit-key, convergence record) so re-runs file nothing twice.
 - Stamp an execution-complexity label on every bead at creation:
   `complexity:low`, `complexity:medium`, `complexity:high`, or
   `complexity:epic`. The coordinator maps this label straight to a worker

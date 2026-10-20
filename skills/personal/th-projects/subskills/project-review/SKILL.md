@@ -92,7 +92,7 @@ Strategy:
 - Pass artifact paths plus a compact Phase 0 manifest and scoped scan excerpt;
   do not paste the same full baseline/scan into every prompt. Assign one primary
   evidence owner per concern so overlapping domains cite rather than rescan.
-- Change-level quality bars live in `/th-engineering` subskills — B: code-readability + dependency-hygiene; C: test-rigor (+ diagnosis for flake/root-cause evidence); E: documentation. When craft-and-care is absent/silent on a domain, agents cite those bars rather than inventing criteria; `investigation-guides.md` stays the evidence checklist, not a second bar.
+- Change-level quality bars live in `/th-engineering` subskills — B: code-readability + dependency-hygiene, plus greenfield-parity's delta workflow as the complexity lens (sketch the from-scratch build before reading code; every excess is justified or residue); C: test-rigor (+ diagnosis for flake/root-cause evidence); E: documentation. When craft-and-care is absent/silent on a domain, agents cite those bars rather than inventing criteria; `investigation-guides.md` stays the evidence checklist, not a second bar.
 - Human-facing surfaces load `/th-design` only for implicated experience
   concerns (design-bar by default; accessibility, discoverability,
   information-design, interaction-speed, or visual-language when specific).

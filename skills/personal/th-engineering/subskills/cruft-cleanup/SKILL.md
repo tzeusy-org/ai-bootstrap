@@ -33,6 +33,9 @@ When refactoring, migrating, or renaming, leave **only the new code path** unles
 - Published APIs with real downstream consumers
 - Cross-repo migrations that cannot be completed atomically
 - Temporary compatibility layers with a verified owner and removal date
+- Residue at architecture scale (layers, abstractions, whole surfaces the
+  spec never needed) rather than one migration's leftovers —
+  [greenfield-parity](../greenfield-parity/SKILL.md)
 
 ## Core Rule
 

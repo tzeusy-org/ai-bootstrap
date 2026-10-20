@@ -13,7 +13,7 @@ metadata:
     - Claude Fable 5.1
     - OpenAI Codex
   status: active
-  last_reviewed: "2026-10-03"
+  last_reviewed: "2026-10-20"
 ---
 
 # Engineering Bar
@@ -42,7 +42,8 @@ change done", "is this good enough to merge", "what does done require here",
   ([code-readability](../code-readability/SKILL.md),
   [test-rigor](../test-rigor/SKILL.md),
   [dependency-hygiene](../dependency-hygiene/SKILL.md),
-  [cruft-cleanup](../cruft-cleanup/SKILL.md))
+  [cruft-cleanup](../cruft-cleanup/SKILL.md),
+  [greenfield-parity](../greenfield-parity/SKILL.md))
 - Project-level governance, specs, or repo-wide audits — `/th-projects`
 
 ## Default Engineering Biases
@@ -94,6 +95,13 @@ biases apply:
    work with rigor, not ego. Incorporate valid feedback quickly, stay humble
    about blind spots, push back clearly on incorrect, weak, or scope-distorting
    claims.
+10. **Prefer greenfield parity over inherited shape** — The code should look
+    as if written once, today, from the current spec. Complexity the spec
+    does not need is residue regardless of how it arrived; a constraint that
+    justifies it gets written down so it stops looking like residue. Without
+    an external consumer, compatibility is not such a constraint.
+    ([greenfield-parity](../greenfield-parity/SKILL.md) operationalizes
+    this, including re-runnable audits.)
 
 ## Definition of Done
 

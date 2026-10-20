@@ -6,10 +6,12 @@ description: >
   test-suite rigor, module boundaries and dependency chains, diagnosing hard
   bugs and flaky failures to root cause, post-refactor cruft cleanup,
   codebase documentation, scaffolding or reviewing skills against the skill
-  quality bar, or Excalidraw diagrams. Triggers: "hold
+  quality bar, greenfield-parity complexity audits that re-run without
+  duplicating beads, or Excalidraw diagrams. Triggers: "hold
   this to the engineering bar", "is this code readable", "review these
   tests", "untangle these dependencies", "diagnose this", "flaky test",
-  "clean up this refactor", "document this service", "audit the docs",
+  "clean up this refactor", "would we build it this way from scratch",
+  "is this over-engineered", "document this service", "audit the docs",
   "review this skill", "create a skill", "draw a diagram".
 metadata:
   owner: tze
@@ -19,13 +21,13 @@ metadata:
     - Claude Fable 5.1
     - OpenAI Codex
   status: active
-  last_reviewed: "2026-10-03"
+  last_reviewed: "2026-10-20"
 compatibility: skill-standards auditing and excalidraw rendering require uv and Python 3.11+; excalidraw-diagram additionally requires Playwright Chromium setup on first render.
 ---
 
 # TH Engineering
 
-Superskill router for the engineering quality bar. Ten subskills live under
+Superskill router for the engineering quality bar. Eleven subskills live under
 `subskills/`, each a complete skill package. **Not** in the global
 catalog — discover lazily, load **at most one** subskill body per
 subdomain, and apply several in sequence in your own session when a task
@@ -55,6 +57,7 @@ rg -n "^name:|^description:" "$PKG"/subskills/*/SKILL.md
 | Codebase documentation: synthesis, diagrams, contract-level code-cited facts, interface semantics cards, human-readable doc sites. | [subskills/documentation/SKILL.md](subskills/documentation/SKILL.md) | "document this service", "audit docs for stale claims" |
 | Evidence bar for diagnosing hard bugs, flaky failures, and perf regressions: feedback loop, ranked hypotheses, tagged instrumentation, regression test at the correct seam. | [subskills/diagnosis/SKILL.md](subskills/diagnosis/SKILL.md) | "diagnose this", "fails one run in twenty", "find the regression" |
 | Finish same-repo refactors/renames/migrations: delete lingering aliases, wrappers, fallbacks, dead flags. | [subskills/cruft-cleanup/SKILL.md](subskills/cruft-cleanup/SKILL.md) | "clean up this refactor", "old path still works" |
+| Complexity vs. spec: sketch the from-scratch build, classify every excess as justified or residue, rewrite-vs-incremental; audits that file beads re-run idempotently against the existing backlog. | [subskills/greenfield-parity/SKILL.md](subskills/greenfield-parity/SKILL.md) | "would we build it this way from scratch", "is this over-engineered", "re-run the audit without duplicating beads" |
 | Skill/superskill quality bar: triggers, grounding, metadata, routing, context efficiency, validation. | [subskills/skill-standards/SKILL.md](subskills/skill-standards/SKILL.md) | "review this skill", "should this be a superskill" |
 | Scaffold or author a new skill end-to-end: init from template, bundle scripts/references/assets, package for distribution. | [subskills/skill-creator/SKILL.md](subskills/skill-creator/SKILL.md) | "create a new skill", "scaffold a skill", "package this skill" |
 | Excalidraw diagrams into/out of workflows, architectures, protocols, Mermaid. | [subskills/excalidraw-diagram/SKILL.md](subskills/excalidraw-diagram/SKILL.md) | "draw a diagram", "convert this Mermaid" |
@@ -66,7 +69,11 @@ rg -n "^name:|^description:" "$PKG"/subskills/*/SKILL.md
 - **Change-level vs. project-level**: changes, diffs, PRs, modules → here.
   Repo-wide audits, specs, prioritization, knowledge architecture →
   `/th-projects` (whose craft-and-care pillar adopts engineering-bar by
-  reference).
+  reference, and whose project-review cites greenfield-parity as its
+  complexity lens).
+- **Refactor leftovers vs. architecture residue**: wrappers and fallbacks
+  from one finished migration → cruft-cleanup; whole surfaces the current
+  spec would never have produced → greenfield-parity.
 - **Build quality vs. product feel**: how the code is built → here; how the
   product feels to use (UX contracts, perceived latency, copy,
   discoverability, accessibility) → `/th-design`. A review that surfaces a

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Greenfield Parity"
+  short_description: "Reconcile a codebase's complexity against a from-scratch build of its spec"
+  default_prompt: "Sketch what a from-scratch build of this project's current spec would look like, diff the actual codebase against it, classify every excess as constraint-justified or residue, and reconcile findings against the existing backlog before filing any new beads."
