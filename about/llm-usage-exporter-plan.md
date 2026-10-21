@@ -5,6 +5,8 @@ in `homelab/mayor/rig` on 2026-08-10. To be picked up as a new subproject inside
 (`ai-bootstrap`) repo. This doc is scratch input for that work, not a pillar doc — once
 implementation starts, fold the durable parts of this into a proper `about/` shape (or a
 dedicated `openspec` change) via the `th-projects` bootstrap flow, and this file can retire.
+The earlier `projects/ai-usage-telemetry` v1 offering was removed from `main` on 2026-08-15
+and its backlog retired on 2026-10-21; this note is the only surviving successor record.
 
 ## Overarching goal
 

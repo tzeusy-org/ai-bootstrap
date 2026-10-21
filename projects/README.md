@@ -8,7 +8,7 @@ change govern product behavior.
 
 ## Adding an Offering
 
-Each immediate `projects/<offering>/` directory must be listed above and expose
+Each immediate `projects/<offering>/` directory must be listed in this file and expose
 its entrypoint at `<offering>/about/README.md`. Run that offering's OpenSpec
 commands from its own root; do not add product-local material to the shared
 skill mirror or installation flow.
