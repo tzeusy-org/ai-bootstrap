@@ -21,7 +21,7 @@ metadata:
     - Claude Opus 5.5
   status: active
   last_reviewed: "2026-10-21"
-compatibility: Requires local file access; review-ready packets require a subagent facility. The validator and the web review surface run with uv and Python 3.11+, stdlib only; the web surface binds a local TCP port and prints a tailnet or FQDN URL.
+compatibility: Requires local file access; review-ready packets require a subagent facility. The validator and the web review surface run with uv and Python 3.11+, stdlib only; the web surface binds a local TCP port and prints an https URL fronted by `tailscale serve` when the node has Tailscale certificates, else the node's Tailscale IPv4 or FQDN URL.
 ---
 
 # User Questionnaire

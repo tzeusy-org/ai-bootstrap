@@ -8,8 +8,9 @@ bd is the ONLY task tracker — no TodoWrite, TaskCreate, or markdown TODOs;
 `bd remember` for persistent knowledge, never MEMORY.md files. The
 SessionStart hook injects the workflow context (`.beads/PRIME.md`); re-run
 `bd prime` after compaction. Session close is mandatory: file beads for
-follow-ups, run quality gates, then commit, `git pull --rebase`, and `git
-push` until "up to date with origin" — work is NOT done until push succeeds.
+follow-ups, run quality gates, `bash scripts/beads-mirror-push.sh`, then
+commit, `git pull --rebase`, and `git push` until "up to date with origin" —
+work is NOT done until push succeeds.
 
 ## Beads Database Topology
 
@@ -25,11 +26,19 @@ DB `aib` (prefix `aib-`), the parent `~/.dotfiles` → DB `dotfiles` (prefix
 `--external`). Migrated from per-repo embedded Dolt on 2026-06-17; repointed
 from localhost to the k8s host on 2026-09-02.
 
-`--external` means **bd does not start/stop the server**. On `connection
-refused`, first check the repo's config points at the k8s host (a stale
-`127.0.0.1` is the usual cause), verify with
-`mysql -h dolt.TAILNET.ts.net -P 3307 -u root --protocol=tcp -e "SHOW DATABASES"`,
-and never start a local `dolt sql-server` as a workaround. Repo→DB selection
+`--external` means **bd does not start/stop the server**. The real hostname
+reaches bd only through `BEADS_DOLT_SERVER_HOST`, exported from the gitignored
+`~/.dotfiles/to_source/machine_specific`; the tracked configs carry the
+placeholder. On `connection refused`, check that the override is in the shell
+and that no config still says `127.0.0.1`, verify with `bd dolt show`
+(`Server connection OK`; `Mode: per-project` is the normal label here and
+there is no `mysql` client on this host), and never start a local `dolt
+sql-server` as a workaround. The server is the source of truth;
+`scripts/beads-mirror-push.sh` mirrors it to origin `refs/dolt/data` at
+session close, with owner emails rewritten and a PII gate, because bare `bd
+dolt push` pushes a stale local directory instead. Recovery on a fresh clone:
+`bd bootstrap --yes` run inside it with the override unset (it reads the
+remote's `refs/dolt/data` itself). Repo→DB selection
 is still per-`.beads/`, so a session here sees only `aib`; address the
 parent's beads explicitly with `bd -C ~/.dotfiles <cmd>`, and cross-prefix
 auto-routing still does NOT work. Known bd errors and workarounds are

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import http.client
 import importlib.util
 import json
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -284,3 +286,69 @@ def test_daemon_serve_is_idempotent_and_stop_terminates_it(web, packet, state_di
     assert not web._pid_alive(first["pid"])
     assert not (state_dir / "server.json").exists()
     assert web.main(["stop", str(packet), "--state-dir", str(state_dir)]) == 0  # no server: still exit 0
+
+
+class _FakeRun:
+    """A subprocess.run stand-in: canned tailscale replies, every command recorded."""
+
+    def __init__(self, status: dict | None, serve_rc: int = 0, missing: bool = False):
+        self.status, self.serve_rc, self.missing, self.calls = status, serve_rc, missing, []
+
+    def __call__(self, cmd, **_):
+        self.calls.append(cmd)
+        if self.missing:
+            raise FileNotFoundError("tailscale")
+        if cmd[:2] == ["tailscale", "status"]:
+            return subprocess.CompletedProcess(cmd, 0 if self.status is not None else 1, json.dumps(self.status or {}), "")
+        return subprocess.CompletedProcess(cmd, self.serve_rc, "", "")
+
+
+# Documentation-range values: the repo's PII guard rejects anything shaped like a real tailnet name or CGNAT address.
+_TS = {"Self": {"DNSName": "node.tail.example.", "TailscaleIPs": ["203.0.113.9", "fd7a::9"]}, "CertDomains": ["node.tail.example"]}
+
+
+def test_public_address_fronts_https_via_tailscale_serve_else_the_ipv4(web, monkeypatch):
+    monkeypatch.delenv("QUESTIONNAIRE_HOST", raising=False)
+    run = _FakeRun(_TS)
+    assert web.public_address(4321, "/q/tok", bind="0.0.0.0", host=None, allow_serve=True, run=run) == (
+        "https://node.tail.example/questionnaire-4321/q/tok/", "/questionnaire-4321")
+    assert run.calls[-1] == ["tailscale", "serve", "--bg", "--yes", "--set-path", "/questionnaire-4321", "http://127.0.0.1:4321"]
+    ipv4 = ("http://203.0.113.9:4321/q/tok/", None)
+    kw = dict(bind="0.0.0.0", host=None, allow_serve=True)
+    assert web.public_address(4321, "/q/tok", **{**kw, "allow_serve": False}, run=_FakeRun(_TS)) == ipv4
+    assert web.public_address(4321, "/q/tok", **kw, run=_FakeRun({**_TS, "CertDomains": []})) == ipv4
+    assert web.public_address(4321, "/q/tok", **kw, run=_FakeRun(_TS, serve_rc=1)) == ipv4, "a failed mount falls back"
+    assert web.public_address(4321, "/q/tok", **{**kw, "host": "h.example"}, run=_FakeRun(_TS)) == ("http://h.example:4321/q/tok/", None)
+    url, path = web.public_address(4321, "/q/tok", **kw, run=_FakeRun(None, missing=True))
+    assert url.startswith("http://") and url.endswith(":4321/q/tok/") and ".ts.net" not in url and path is None
+
+
+def test_tailscale_serve_unmounts_with_off_and_survives_a_missing_binary(web):
+    run = _FakeRun(_TS)
+    assert web.tailscale_serve("/questionnaire-1", None, run=run)
+    assert run.calls == [["tailscale", "serve", "--bg", "--yes", "--set-path", "/questionnaire-1", "off"]]
+    assert not web.tailscale_serve("/questionnaire-1", "http://127.0.0.1:1", run=_FakeRun(None, missing=True))
+
+
+def test_stop_releases_the_recorded_serve_path(web, packet, state_dir, capsys, monkeypatch):
+    argv = ["serve", str(packet), "--state-dir", str(state_dir), "--bind", "127.0.0.1", "--host", "localhost"]
+    assert web.main(argv) == 0
+    info = json.loads((state_dir / "server.json").read_text())
+    assert info["serve_path"] is None, "an explicit host never mounts a serve path"
+    info["serve_path"] = "/questionnaire-test"
+    (state_dir / "server.json").write_text(json.dumps(info))
+    released = []
+    monkeypatch.setattr(web, "tailscale_serve", lambda path, target, run=None: released.append((path, target)) or True)
+    assert web.main(["stop", str(packet), "--state-dir", str(state_dir)]) == 0
+    assert released == [("/questionnaire-test", None)]
+
+
+def test_token_url_without_trailing_slash_redirects_relatively(server):
+    host, port = server.removeprefix("http://").split(":")
+    conn = http.client.HTTPConnection(host, int(port), timeout=5)
+    conn.request("GET", "/q/tok")
+    response = conn.getresponse()
+    assert response.status == 301 and response.getheader("Location") == "tok/"
+    conn.request("GET", "/q/tok/")
+    html = conn.getresponse().read().decode()
+    assert '"api": "api"' in html and '"/q/tok/api"' not in html, "the page's API base is relative"

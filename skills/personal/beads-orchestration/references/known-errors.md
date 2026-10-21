@@ -232,6 +232,19 @@ troubleshooting steps instead. Use `bd dolt status`, `bd version`, and
 `ls .beads/embeddeddolt/` for embedded diagnostics.
 
 ### bd WRITE path silently reverts; jsonl auto-import clobbers committed state (post-3307-migration)
+- **FIXED — does not reproduce on bd 1.3.1 (verified 2026-10-21, aib repo).**
+  The reverts came from bd auto-importing a stale `issues.jsonl` over the
+  shared server. That path is gone: the repo has no `issues.jsonl`,
+  `export.auto` is false, `bd dolt show --json` reports
+  `{"embedded":false,"shared_server":false,"connection_ok":true}`, and every
+  write in a long session persisted across reads. `Mode: per-project` in `bd
+  dolt show` is 1.3.1's normal label for a per-project database on the
+  server, NOT the split-brain signal described below, so the re-init the old
+  "real fix" called for was not needed. The orphaned per-project data-dir
+  `.beads/dolt` (21 MB, last written 2026-08-30) was moved to
+  `~/.tmp/beads-mirror/orphan-aib-cli-dir-20261021/`; `.beads/embeddeddolt/aib`
+  (2026-07-03) is a second pre-migration leftover, left in place. The
+  historical entry follows for its symptom text; drop it one revision later.
 - **Symptom**: `bd update`/`bd close`/`bd update --claim` print `✓ Updated`/
   `✓ Closed` (exit 0) but the change does NOT persist — a later `bd show`/`bd
   ready` shows the bead back at its prior state. Every `bd` call logs
@@ -257,11 +270,8 @@ troubleshooting steps instead. Use `bd dolt status`, `bd version`, and
   inline coordinator PR review instead of separate review beads. Also set `bd
   config set export.git-add false` and `export.interval 0` so exports stop
   aborting/throttling.
-- **Real fix (TODO, needs human)**: properly establish external-server mode so
-  bd stops auto-importing jsonl — re-init per the "Migrating … to the shared
-  external server" entry above (`bd init --server --external … --from-jsonl
-  --reinit-local`), then remove the orphaned `.beads/dolt` per-project data-dir
-  once `metadata.json` shows server mode. Until then, bd writes are unsafe.
+- **Real fix**: resolved as described in the FIXED note above (no re-init;
+  the jsonl auto-import path no longer exists in this repo).
 - Observed: 2026-06-17, bd 1.0.4.
 - **Recurrence + trap (2026-07-06)**: the failure is INTERMITTENT, which makes
   it look fixed. A session saw `bd create`/`--claim`/`bd close` persist across
@@ -273,6 +283,9 @@ troubleshooting steps instead. Use `bd dolt status`, `bd version`, and
   as evidence of a fix; verify `bd dolt show` no longer reports
   `Mode: per-project` before trusting bd writes. Until the real fix lands, use
   the jsonl-edit workaround above for anything you can't afford to lose.
+  (Superseded 2026-10-21: on 1.3.1 `per-project` is the normal label; the
+  check is `bd dolt show --json` → `embedded:false, connection_ok:true` and
+  no `auto-importing` line in any `bd` output.)
 
 ### `bd worktree remove` may rewrite `.gitignore` comments
 - **Symptom**: after removing a worktree through `bd worktree remove`,
@@ -325,24 +338,71 @@ an explicit method) reappears in other scripts.
   safely reports and skips when the local database has no remote.
 - Observed: 2026-07-10, bd 1.0.4.
 
-## `bd dolt push` errors in external-server mode (no BEADS_DOLT_CLI_DIR)
+## `bd dolt push` in external-server mode errors, or pushes a stale local directory
 
-- **Symptom**: `bd dolt push` fails with `Error: dolt push requires a local
-  Dolt CLI database directory in external-server mode; set
-  BEADS_DOLT_CLI_DIR to the local Dolt database path or use a remote type
-  supported by SQL DOLT_PUSH/DOLT_PULL`. It does NOT "safely skip" as the
-  `bd sync` entry above suggests — that skip behavior predates the
-  shared-external-server migration.
-- **Cause**: post-3307-migration repos run against the shared external
-  server (`dolt.TAILNET.ts.net:3307`), where bd cannot drive a CLI push without an
-  explicit local Dolt database path, and no Dolt remote is configured for
-  the per-project DBs anyway.
-- **Disposition**: session-end "push beads" is currently a no-op for these
-  repos — durability rests on the shared server's data dir plus the jsonl
-  export where one exists. Do not chase BEADS_DOLT_CLI_DIR; setting up a
-  real Dolt remote is part of the same "needs human" external-server
-  repair tracked in the WRITE-path entry above.
-- Observed: 2026-07-19, bd 1.0.4, aib repo.
+- **Symptom (bd 1.0.4)**: `Error: dolt push requires a local Dolt CLI
+  database directory in external-server mode; set BEADS_DOLT_CLI_DIR to the
+  local Dolt database path or use a remote type supported by SQL
+  DOLT_PUSH/DOLT_PULL`. It does NOT "safely skip" as the `bd sync` entry
+  above suggests.
+- **Symptom (bd 1.3.1)**: `bd dolt push` prints `Pushing to Dolt remote...
+  Push complete.` yet `git ls-remote origin refs/dolt/data` is unchanged, or
+  it prints `hint: Updates were rejected because the tip of your current
+  branch is behind its remote counterpart`. It pushed a leftover local Dolt
+  directory (`.beads/dolt/<db>` or `.beads/embeddeddolt/<db>`), never the
+  server.
+- **Cause**: in external-server mode bd has no path from the shared server to
+  a git remote (the server itself holds `dolt_remotes` → origin but has no
+  credentials), so the push falls back to whatever local Dolt directory it
+  finds.
+- **Fix (2026-10-21)**: never run bare `bd dolt push` here. Run
+  `scripts/beads-mirror-push.sh` (session close, see AGENTS.md step 4): it
+  exports the server with `bd export --include-memories`, rewrites email
+  owners to the creating actor, refuses to continue on a denylist/tailnet/
+  CGNAT hit, syncs an embedded workspace at `~/.tmp/beads-mirror/<db>`
+  (prunes edges and issues the server dropped, then `bd import
+  --allow-stale`), pushes that workspace, and prints `refs/dolt/data: <old>
+  -> <new>` so a no-op is visible. `--dry-run` stops after the PII gate.
+  Recovery on another machine: clone the repo and run `env -u
+  BEADS_DOLT_SERVER_HOST bd bootstrap --yes` inside it; bootstrap reads the
+  remote's `refs/dolt/data` itself, no local fetch needed (verified
+  2026-10-21: 106 issues, 1 memory, 113 edges restored). `bd -C <dir>
+  bootstrap` does not create the project; run it from inside the clone.
+  Server history is not mirrored, only its current state.
+- Observed: 2026-07-19 (1.0.4), 2026-10-21 (1.3.1), aib repo.
+
+## Bootstrapped database from an older `refs/dolt/data` needs schema migrations
+
+- **Symptom**: after `bd bootstrap --yes` of a ref written by an older bd,
+  commands stop because the database needs schema migrations (34 of them
+  from the 2026-08-30 ref, written by bd 1.0.x; the message cites
+  gastownhall/beads issue #4259).
+- **Fix**: run `bd migrate --force` once in that checkout (this bd becomes the
+  designated migrator). It is idempotent (`✓ Version matches` on a current
+  database), so the mirror script runs it after every bootstrap. The public
+  ref has carried the 1.3.1 schema since 2026-10-21, so a fresh bootstrap no
+  longer hits this.
+- Observed: 2026-10-21, bd 1.3.1.
+
+## `bd sql` unsupported in embedded mode
+
+- **Symptom**: `bd sql "<query>"` errors in an embedded-mode checkout; it
+  works against the shared server.
+- **Workaround**: `bd export -o <file>` + `jq`, `bd show --json`, `bd stats`,
+  or the `dolt` CLI inside `.beads/embeddeddolt/<db>`.
+- Observed: 2026-10-21, bd 1.3.1.
+
+## `bd import` keeps newer local rows and never removes dropped edges
+
+- **Symptom**: `bd import <file>` ends with `N stale skipped; use
+  --allow-stale`; dependencies deleted upstream are still present after the
+  import; `bd import <(...)` fails with `Empty file: /proc/self/fd/N`.
+- **Cause**: import is an additive upsert gated on `updated_at`, and it
+  stats its argument.
+- **Fix**: `--allow-stale` to make the file win; `bd dep remove <issue>
+  <depends-on>` and `bd delete --from-file <ids> --force` first for anything
+  the source dropped; pass a real file path.
+- Observed: 2026-10-21, bd 1.3.1.
 
 ## zsh `echo` can corrupt compact `bd --json` before `jq`
 

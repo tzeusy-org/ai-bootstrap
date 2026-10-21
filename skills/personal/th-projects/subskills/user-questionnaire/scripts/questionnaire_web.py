@@ -22,6 +22,11 @@ find it from the packet alone: answers.json, server.json, server.log.
 answers.json on disk is the only copy of the answers. The server and `ingest`
 each read-modify-write it under one advisory file lock (answers.lock), so a
 running server and a concurrent ingest never lose each other's writes.
+
+The printed URL is https through `tailscale serve` when the node holds
+Tailscale HTTPS certificates (bare *.ts.net names are HSTS-preloaded, so a
+browser refuses plain http on them); otherwise the node's Tailscale IPv4, else
+the FQDN. `stop` and the server's own exit unmount the serve path again.
 """
 
 from __future__ import annotations
@@ -39,7 +44,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -231,6 +236,13 @@ class Handler(BaseHTTPRequestHandler):
         return path[len(prefix) :] or "/"
 
     def do_GET(self) -> None:  # noqa: N802
+        if self.path.split("?", 1)[0] == self.server.prefix:
+            # Relative, so the link also resolves behind a reverse-proxy mount path.
+            self.send_response(301)
+            self.send_header("Location", f"{self.server.token}/")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return None
         route = self._route()
         if route is None:
             return self._send(404, b"not found", "text/plain")
@@ -241,7 +253,7 @@ class Handler(BaseHTTPRequestHandler):
             html = page.render_page(
                 model,
                 answers,
-                api=self.server.prefix + "/api",
+                api="api",  # relative: the page may be served under a proxy mount path
                 live=True,
                 packet_sha256=digest,
                 images=page.ImageResolver(self.server.packet.parent),
@@ -284,21 +296,61 @@ def make_server(packet: Path, state_dir: Path, bind: str, port: int, token: str 
     return QuestionnaireServer((bind, port), packet, state_dir, token or secrets.token_urlsafe(12))
 
 
-def public_host(override: str | None = None) -> str:
-    if override:
-        return override
-    if os.environ.get("QUESTIONNAIRE_HOST"):
-        return os.environ["QUESTIONNAIRE_HOST"]
+Run = Callable[..., subprocess.CompletedProcess[str]]
+
+
+def tailscale_self(run: Run = subprocess.run) -> dict[str, Any]:
+    """``tailscale status --self --json`` as a dict; empty when tailscale is absent or down."""
     try:
-        out = subprocess.run(["tailscale", "status", "--self", "--json"], capture_output=True, text=True, timeout=5)
-        if out.returncode == 0:
-            name = json.loads(out.stdout).get("Self", {}).get("DNSName", "").rstrip(".")
-            if name:
-                return name
+        out = run(["tailscale", "status", "--self", "--json"], capture_output=True, text=True, timeout=5)
+        return json.loads(out.stdout) if out.returncode == 0 else {}
     except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
-        pass
+        return {}
+
+
+def tailscale_serve(path: str, target: str | None, run: Run = subprocess.run) -> bool:
+    """Mount ``target`` at ``path`` on this node's tailscale serve, or unmount it when ``target`` is None."""
+    cmd = ["tailscale", "serve", "--bg", "--yes", "--set-path", path, target or "off"]
+    try:
+        return run(cmd, capture_output=True, text=True, timeout=15).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def public_address(
+    port: int, prefix: str, *, bind: str, host: str | None, allow_serve: bool, run: Run = subprocess.run
+) -> tuple[str, str | None]:
+    """The URL to hand the owner, and the tailscale serve path mounted for it (None when none).
+
+    An explicit host (``--host`` or ``QUESTIONNAIRE_HOST``) is printed as given.
+    Otherwise a tailnet node with HTTPS certificates is fronted by ``tailscale
+    serve`` on a per-port path: browsers force https on ``*.ts.net`` names (HSTS
+    preload), which this plain-HTTP server cannot answer. Without certificates,
+    or when the mount fails, the node's Tailscale IPv4 is printed instead; IP
+    literals are exempt from HSTS. Off the tailnet, the FQDN.
+    """
+    host = host or os.environ.get("QUESTIONNAIRE_HOST")
+    if host:
+        return f"http://{host}:{port}{prefix}/", None
+    status = tailscale_self(run)
+    me = status.get("Self") or {}
+    dns_name = str(me.get("DNSName") or "").rstrip(".")
+    ipv4 = next((ip for ip in me.get("TailscaleIPs") or [] if ":" not in ip), "")
+    if dns_name and status.get("CertDomains") and allow_serve:
+        path = f"/questionnaire-{port}"
+        loopback = "127.0.0.1" if bind in ("0.0.0.0", "") else bind
+        if tailscale_serve(path, f"http://{loopback}:{port}", run):
+            return f"https://{dns_name}{path}{prefix}/", path
+    if ipv4:
+        return f"http://{ipv4}:{port}{prefix}/", None
     fqdn = socket.getfqdn()
-    return fqdn if "." in fqdn else socket.gethostname()
+    return f"http://{fqdn if '.' in fqdn else socket.gethostname()}:{port}{prefix}/", None
+
+
+def _release_serve(info: dict[str, Any]) -> None:
+    """Unmount the serve path a server recorded, if any; an already-missing mount is fine."""
+    if info.get("serve_path"):
+        tailscale_serve(info["serve_path"], None)
 
 
 def _pid_alive(pid: int) -> bool:
@@ -378,14 +430,16 @@ def cmd_render(args: argparse.Namespace) -> int:
 def _run_foreground(args: argparse.Namespace, packet: Path, state_dir: Path) -> int:
     httpd = make_server(packet, state_dir, args.bind, args.port, args.token)
     port = httpd.server_address[1]
-    host = public_host(args.host)
+    url, serve_path = public_address(
+        port, httpd.prefix, bind=args.bind, host=args.host, allow_serve=not args.no_tailscale_serve
+    )
     info = {
         "pid": os.getpid(),
         "port": port,
         "bind": args.bind,
-        "host": host,
         "token": httpd.token,
-        "url": f"http://{host}:{port}{httpd.prefix}/",
+        "url": url,
+        "serve_path": serve_path,
         "packet": str(packet),
         "state_dir": str(state_dir),
         "started_at": now_iso(),
@@ -401,6 +455,7 @@ def _run_foreground(args: argparse.Namespace, packet: Path, state_dir: Path) -> 
         pass
     finally:
         httpd.server_close()
+        _release_serve(info)
     return 0
 
 
@@ -429,6 +484,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
     if existing and not _terminate(int(existing["pid"])):
         print(f"ERROR: could not stop running server pid {existing['pid']}", file=sys.stderr)
         return 1
+    if existing:
+        _release_serve(existing)
     (state_dir / "server.json").unlink(missing_ok=True)
     cmd = [sys.executable, str(Path(__file__).resolve()), "serve", str(packet), "--foreground",
            "--state-dir", str(state_dir), "--bind", args.bind, "--port", str(args.port)]
@@ -436,6 +493,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
         cmd += ["--host", args.host]
     if args.token:
         cmd += ["--token", args.token]
+    if args.no_tailscale_serve:
+        cmd.append("--no-tailscale-serve")
     with open(state_dir / "server.log", "ab") as log:
         subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True, close_fds=True)
     deadline = time.time() + 15
@@ -623,6 +682,7 @@ def cmd_stop(args: argparse.Namespace) -> int:
         print(f"ERROR: pid {info['pid']} did not exit", file=sys.stderr)
         return 1
     (state_dir / "server.json").unlink(missing_ok=True)
+    _release_serve(info)
     print(f"stopped pid {info['pid']} on port {info['port']}")
     return 0
 
@@ -639,7 +699,8 @@ def main(argv: list[str] | None = None) -> int:
     common(p)
     p.add_argument("--bind", default="0.0.0.0", help="interface to bind (default all)")
     p.add_argument("--port", type=int, default=0, help="port (default: random open port)")
-    p.add_argument("--host", help="hostname for the printed URL (default: tailscale DNS name, else FQDN)")
+    p.add_argument("--host", help="hostname for the printed http URL (default: https via tailscale serve, else Tailscale IPv4, else FQDN)")
+    p.add_argument("--no-tailscale-serve", action="store_true", help="never mount a tailscale serve path; print the Tailscale IPv4 URL")
     p.add_argument("--token", help="fixed URL token (default: random)")
     p.add_argument("--restart", action="store_true", help="replace a running server for this packet")
     p.add_argument("--foreground", action="store_true", help="run in this process (used by the daemon child)")

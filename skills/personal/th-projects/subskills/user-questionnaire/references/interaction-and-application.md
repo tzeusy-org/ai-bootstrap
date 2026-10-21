@@ -18,6 +18,20 @@ publishes only a packet that passes `--require-review-ready` validation;
 `render <packet> --out <file>` writes a read-only preview of any packet,
 drafts included, flagged as not ready for signoff.
 
+The printed URL is https when the node holds Tailscale HTTPS certificates:
+`serve` mounts `/questionnaire-<port>` → `http://127.0.0.1:<port>` with
+`tailscale serve --bg`, prints `https://<node>.<tailnet>.ts.net/questionnaire-<port>/q/<token>/`,
+and `stop` (or the server's own exit) unmounts it again. A bare `*.ts.net`
+name is never printed: the suffix is HSTS-preloaded, so browsers force https
+and the plain-HTTP server answers `ERR_SSL_PROTOCOL_ERROR`. Without
+certificates, with `--no-tailscale-serve`, or when the mount fails, the URL
+uses the node's Tailscale IPv4 (IP literals are exempt from HSTS); off the
+tailnet, the FQDN. `--host` or `QUESTIONNAIRE_HOST` prints that host as given
+and mounts nothing. Page links are relative so they survive the mount path.
+A server killed outright leaves its path mounted; `tailscale serve status`
+lists it and `tailscale serve --bg --set-path /questionnaire-<port> off`
+removes it.
+
 The page presents the same five elements per item as the chat walkthrough,
 keeps every item independent, and asks the apply offer as its own final
 control, never inside an item. It is one self-contained file (styles, script,
@@ -52,7 +66,8 @@ running server and a concurrent ingest never lose each other's writes. The
 first answer pins the packet version being read; if the packet changes
 afterward the open page tells the owner to reload and `ingest` refuses. The
 URL carries a random token; the page is reachable to anyone holding the link
-on the bound interfaces, which is why packets never carry secrets.
+on the bound interfaces (the whole tailnet when fronted by `tailscale serve`),
+which is why packets never carry secrets.
 
 `status <packet>` reports progress (exit 0 only after the owner submitted;
 `--wait N` polls). `ingest <packet>` writes the answers into the packet:

@@ -80,6 +80,7 @@ bd close <id>         # Complete work
 3. **Update issue status** - Close finished work, update in-progress items
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
+   bash scripts/beads-mirror-push.sh   # beads DB -> origin refs/dolt/data (never bare `bd dolt push`)
    git pull --rebase
    git push
    git status  # MUST show "up to date with origin"
