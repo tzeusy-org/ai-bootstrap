@@ -228,6 +228,17 @@ def inline(text: str, *, links: bool = True) -> str:
     return "".join(out)
 
 
+def plain(text: str) -> str:
+    """Inline markdown reduced to its words, for text the page script sets as textContent."""
+    out = []
+    for part in re.split(r"(`[^`]+`)", text):
+        if len(part) > 1 and part.startswith("`") and part.endswith("`"):
+            out.append(part[1:-1])
+            continue
+        out.append(_LINK_RE.sub(r"\1", _ITALIC_RE.sub(r"\1", _BOLD_RE.sub(r"\1", part))))
+    return "".join(out)
+
+
 def _starts_block(line: str) -> bool:
     stripped = line.strip()
     return bool(
@@ -243,7 +254,7 @@ def _figure(alt: str, ref: str, images: ImageResolver | None) -> str:
     caption = f"<figcaption>{inline(alt)}</figcaption>" if alt else ""
     if src is None:
         return f'<figure class="figure missing"><p>Diagram unavailable: <code>{html.escape(ref)}</code></p>{caption}</figure>'
-    return f'<figure class="figure"><span class="figure-scroll"><img src="{src}" alt="{html.escape(alt)}"></span>{caption}</figure>'
+    return f'<figure class="figure"><img src="{src}" alt="{html.escape(alt)}">{caption}</figure>'
 
 
 def _table(rows: list[list[str]]) -> str:
@@ -422,7 +433,7 @@ def _item_html(item: Item, index: int, total: int, images: ImageResolver) -> str
 <article class="item" id="item-{iid}" data-id="{iid}" aria-labelledby="title-{iid}">
   <header class="item-head">
     <p class="eyebrow"><span class="count">Decision {index} of {total}</span>{priority}{review}<code class="iid">{iid}</code></p>
-    <h2 id="title-{iid}">{inline(item.title)}</h2>
+    <h2 id="title-{iid}" tabindex="-1">{inline(item.title)}</h2>
     <div class="ask">{markdown(item.decision_needed, images)}</div>
   </header>
   {rec}
@@ -528,9 +539,9 @@ def _preface_html(packet: Packet, images: ImageResolver) -> str:
 
 FINAL_HTML = """
 <section class="final" id="final" aria-labelledby="final-h">
-  <h2 id="final-h">Submit your review</h2>
+  <h2 id="final-h" tabindex="-1">Submit your review</h2>
   <ul class="tally" id="tally"></ul>
-  <p class="todo" id="todo"></p>
+  <div class="todo" id="todo"></div>
   <fieldset class="apply">
     <legend>Apply the recorded decisions when the next session ingests them?</legend>
     <label class="choice"><input type="radio" name="apply" value="true"><span><strong>Yes, apply</strong>Route exactly the chosen and held items in this packet through their owning workflows.</span></label>
@@ -572,7 +583,7 @@ def render_page(
         "packetSha256": packet_sha256,
         "answers": answers,
         "items": [
-            {"id": i.id, "title": i.title, "options": [o.label for o in i.options], "recommended": i.recommended}
+            {"id": i.id, "title": plain(i.title), "options": [o.label for o in i.options], "recommended": i.recommended}
             for i in packet.items
         ],
         "statusText": KIND_STATUS,

@@ -120,6 +120,14 @@ def test_boot_payload_cannot_end_or_comment_out_its_script(page, text):
     assert json.loads(boot)["answers"]["items"]["dec-auth"]["note"] == "<!--<script> & </script>"
 
 
+def test_boot_titles_are_plain_text_for_the_script(page, text):
+    # page.js sets titles as textContent (the still-to-answer list); raw markdown would show its backticks.
+    html = _render(page, text.replace("choose credential authority", "pick the `auth` **owner** for [docs](https://e.com)"))
+    boot = json.loads(html.split('<script id="q-boot" type="application/json">', 1)[1].split("</script>", 1)[0])
+    assert boot["items"][0]["title"] == "pick the auth owner for docs"
+    assert page.plain("keep `**x**` and globs a/*.py, b/*.md") == "keep **x** and globs a/*.py, b/*.md"
+
+
 def test_recommendation_leads_with_the_option_name(page, text):
     html = _render(page, text)
     assert '<span class="rec-tag">Recommended</span><span class="key key-sm" aria-hidden="true">A</span><strong>Shared authority</strong>' in html
@@ -153,4 +161,4 @@ def test_diagram_subsection_renders_as_a_figure(page, text, tmp_path):
     text = text.replace("#### Authorization boundary", "#### Diagram\n\n![Before and after](delta.svg)\n\n#### Authorization boundary")
     html = _render(page, text, images=page.ImageResolver(tmp_path))
     diagram = html.split('<div class="diagram">', 1)[1]
-    assert diagram.startswith('<figure class="figure"><span class="figure-scroll"><img src="data:image/svg+xml;base64,')
+    assert diagram.startswith('<figure class="figure"><img src="data:image/svg+xml;base64,')

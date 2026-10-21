@@ -146,7 +146,7 @@ Scope: v1-mandatory
 The workflow MUST be able to publish a review-ready packet as a local, token-gated web form the owner answers asynchronously, and a later session MUST ingest those answers into the packet's owner decision records without spending tokens while the owner reads.
 
 ID: REQ-owner-questionnaire-008
-Source: owner request 2026-10-21 (web review surface; artifact-style design pass); REQ-owner-questionnaire-004, REQ-owner-questionnaire-007
+Source: owner request 2026-10-21 (web review surface; artifact-style design pass; mobile usability pass); REQ-owner-questionnaire-004, REQ-owner-questionnaire-007
 Scope: v1-mandatory
 
 #### Scenario: Only review-ready packets are published
@@ -158,6 +158,11 @@ Scope: v1-mandatory
 
 - **WHEN** the owner opens the printed URL
 - **THEN** one self-contained page shows each item's decision, recommendation, optional delta diagram, labeled background, and options; each answer persists as it is given; and the apply offer is a separate final question
+
+#### Scenario: Owner answers from a phone
+
+- **WHEN** the owner opens the URL on a phone on the same tailnet
+- **THEN** the page fits the screen without sideways scrolling, every control is a touch-sized target, a control moves to the next unanswered item or to submit, and an answer that fails to save while the phone is offline is resent once the connection returns
 
 #### Scenario: Submission is complete or refused
 

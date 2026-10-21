@@ -62,7 +62,10 @@ Optional, after Recommendation: **Diagram** — one image link,
 data flow, or topology and a before/after picture decides faster than prose.
 Draw it with `/th-engineering` excalidraw-diagram (light theme, SVG) and keep
 the file beside the packet; the web page inlines it and refuses paths outside
-the packet's directory. Skip it for policy or wording decisions.
+the packet's directory. The page shrinks it to the screen width, and the owner
+may read on a phone, so draw it narrow: about 800 px wide at most, labels
+large, before stacked above after rather than side by side when the pair would
+be wider. Skip it for policy or wording decisions.
 
 Aim for 150-350 words per ordinary decision. Spend more only when options have
 materially different security, data, or architecture consequences. Put shared

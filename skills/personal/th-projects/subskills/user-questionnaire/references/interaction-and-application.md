@@ -50,7 +50,16 @@ and diagrams inlined), so it works offline. Layout and behavior:
   jumps to submit, `?` lists them; answer keys act only on the highlighted
   card;
 - submit stays disabled until every item is answered, every edit is
-  described, and the apply question is answered; the server enforces the same.
+  described, and the apply question is answered; the server enforces the same;
+- phones on the tailnet use the same URL: below the sidebar width a top-bar
+  "Next ↓" jumps to the next unanswered decision (then to submit); touch
+  screens get 44px targets, 16px fields (no iOS focus zoom), and no keyboard
+  help; hold and reject leave the on-screen keyboard closed (edit opens it,
+  its text is required); when the browser is back online or the page is
+  shown again, it picks up answers given on another device and resends a
+  save lost to a dropped connection, unless that item was answered again
+  elsewhere meanwhile (the newer answer wins). Requests time out after 15 s
+  so a stalled one cannot hold up later saves.
 
 The page is rendered by [`scripts/questionnaire_page.py`](../scripts/questionnaire_page.py)
 from [`assets/web/`](../assets/web/) (`page.html`, `page.css`, `page.js`);
