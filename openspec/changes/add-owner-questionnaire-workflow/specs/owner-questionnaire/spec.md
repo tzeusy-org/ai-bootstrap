@@ -140,3 +140,31 @@ Scope: v1-mandatory
 
 - **WHEN** applying finds an existing owner-assigned item already satisfied by a recorded decision
 - **THEN** the workflow notes that it is ready to close instead of force-closing it
+
+### Requirement: Asynchronous Web Review Surface
+
+The workflow MUST be able to publish a review-ready packet as a local, token-gated web form the owner answers asynchronously, and a later session MUST ingest those answers into the packet's owner decision records without spending tokens while the owner reads.
+
+ID: REQ-owner-questionnaire-008
+Source: owner request 2026-10-21 (web review surface; artifact-style design pass); REQ-owner-questionnaire-004, REQ-owner-questionnaire-007
+Scope: v1-mandatory
+
+#### Scenario: Only review-ready packets are published
+
+- **WHEN** an agent publishes a packet that fails `--require-review-ready` validation
+- **THEN** the publish command exits nonzero naming each defect, and a read-only preview remains available that flags unreviewed items as not ready for signoff
+
+#### Scenario: Owner answers in the browser
+
+- **WHEN** the owner opens the printed URL
+- **THEN** one self-contained page shows each item's decision, recommendation, optional delta diagram, labeled background, and options; each answer persists as it is given; and the apply offer is a separate final question
+
+#### Scenario: Submission is complete or refused
+
+- **WHEN** the owner submits with an unanswered item, an undescribed edit, or no answer to the apply question
+- **THEN** the server refuses the submission and the page names what is missing
+
+#### Scenario: Ingest preserves framing and authorship
+
+- **WHEN** a later session ingests submitted answers
+- **THEN** each answered item's state and owner decision record are written verbatim, an author-named canonical destination is kept, and ingest refuses if the packet changed after the owner began answering unless explicitly forced

@@ -18,6 +18,7 @@ metadata:
     - tze
     - OpenAI Codex
     - Claude Fable 5.1
+    - Claude Opus 5.5
   status: active
   last_reviewed: "2026-10-21"
 compatibility: Requires local file access; review-ready packets require a subagent facility. The validator and the web review surface run with uv and Python 3.11+, stdlib only; the web surface binds a local TCP port and prints a tailnet or FQDN URL.
@@ -90,10 +91,12 @@ A run that produced no owner gates publishes nothing and says so.
    review.
 7. **Publish the web review surface.** Run
    [`scripts/questionnaire_web.py`](scripts/questionnaire_web.py) `serve`; it
-   renders the validated packet as a self-contained HTML form, starts a
-   background server on a random open port, persists answers under
-   `~/.tmp/user-questionnaire/`, and prints the URL. Re-running it for the
-   same packet reuses the running server, so the command is idempotent.
+   re-runs the review-ready validation and refuses a packet that fails it,
+   then starts a background server on a random open port, persists answers
+   under `~/.tmp/user-questionnaire/`, and prints the URL. Re-running it for
+   the same packet reuses the running server, so the command is idempotent.
+   To look at a draft before review, `render <packet> --out page.html` writes
+   a read-only preview instead.
 
    ```bash
    uv run "$QUESTIONNAIRE_SKILL_DIR/scripts/questionnaire_web.py" serve \
@@ -102,10 +105,11 @@ A run that produced no owner gates publishes nothing and says so.
 
    The handoff report ends with that `QUESTIONNAIRE_URL=` line, the packet
    path, item count, evidence snapshot, and unresolved unknowns. Do not
-   paste the packet into chat. The page is the owner's walkthrough: one card
-   per item with the recommendation, options, hold/reject/edit controls, and a
-   separate final submit-and-apply question. No LLM tokens are spent after
-   this command.
+   paste the packet into chat. The page is the owner's walkthrough: an
+   at-a-glance list, then one card per item leading with the decision and
+   recommendation, any delta diagram, labeled background, and option cards
+   with hold/reject/edit controls; a separate final question asks whether to
+   apply. No LLM tokens are spent after this command.
 
 ## Walk the owner through it
 

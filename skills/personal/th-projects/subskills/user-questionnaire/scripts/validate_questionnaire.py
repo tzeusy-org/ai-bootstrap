@@ -39,6 +39,11 @@ OWNER_FIELDS = (
     "Routing evidence",
 )
 RESERVED_REVIEWER_IDS = {"pending", "todo", "tbd", "unknown", "none", "n/a"}
+# Owner-authored free text (with indented continuation lines) inside an owner
+# decision record that carries an answer timestamp. It is the owner's words,
+# not author scaffolding, so the placeholder scan skips it: "Held: TBD after
+# the migration" is a valid answer. Unanswered records are still scanned.
+OWNER_TEXT_RE = re.compile(r"^- (?:Choice|Owner edits):.*(?:\n[ \t]+\S.*)*", re.MULTILINE)
 
 
 def _summary_rows(text: str) -> tuple[dict[str, str], list[str]]:
@@ -74,7 +79,7 @@ def _summary_rows(text: str) -> tuple[dict[str, str], list[str]]:
     return rows, errors
 
 
-def _section_blocks(text: str) -> tuple[list[tuple[str, str]], list[str]]:
+def section_blocks(text: str) -> tuple[list[tuple[str, str]], list[str]]:
     matches = list(SECTION_RE.finditer(text))
     errors: list[str] = []
     seen: set[str] = set()
@@ -91,12 +96,12 @@ def _section_blocks(text: str) -> tuple[list[tuple[str, str]], list[str]]:
     return blocks, errors
 
 
-def _field(block: str, label: str) -> str | None:
+def labeled_field(block: str, label: str) -> str | None:
     match = re.search(rf"^\*\*{re.escape(label)}:\*\*\s*(.+)$", block, re.MULTILINE)
     return match.group(1).strip() if match else None
 
 
-def _subsection(block: str, heading: str) -> str | None:
+def subsection(block: str, heading: str) -> str | None:
     match = re.search(
         rf"^#### {re.escape(heading)}\s*$\n(?P<body>.*?)(?=^#### |\Z)",
         block,
@@ -111,7 +116,7 @@ def _bullet_field(body: str, label: str) -> str | None:
 
 
 def _validate_review(decision_id: str, block: str, errors: list[str]) -> None:
-    review_header = _field(block, "Adversarial review")
+    review_header = labeled_field(block, "Adversarial review")
     header_match = re.fullmatch(
         r"Passed\s+—\s+reviewer\s+`([^`]+)`\s+on\s+\d{4}-\d{2}-\d{2}",
         review_header or "",
@@ -123,7 +128,7 @@ def _validate_review(decision_id: str, block: str, errors: list[str]) -> None:
     elif header_match.group(1).strip().lower() in RESERVED_REVIEWER_IDS:
         errors.append(f"`{decision_id}` adversarial review header uses a reserved Reviewer id")
 
-    review_body = _subsection(block, "Adversarial review record") or ""
+    review_body = subsection(block, "Adversarial review record") or ""
     reviewer = _bullet_field(review_body, "Reviewer")
     reviewer_match = re.fullmatch(r"`([^`]+)`", reviewer or "")
     if not reviewer_match:
@@ -149,7 +154,7 @@ def _validate_review(decision_id: str, block: str, errors: list[str]) -> None:
 
 
 def _validate_options(decision_id: str, block: str, errors: list[str]) -> set[str]:
-    body = _subsection(block, "Options")
+    body = subsection(block, "Options")
     if body is None:
         return set()
     labels: list[str] = []
@@ -176,7 +181,7 @@ def _validate_options(decision_id: str, block: str, errors: list[str]) -> set[st
 def _validate_recommendation(
     decision_id: str, block: str, options: set[str], errors: list[str]
 ) -> None:
-    body = _subsection(block, "Recommendation") or ""
+    body = subsection(block, "Recommendation") or ""
     match = re.search(r"\b(?:Choose|Recommend)\s+\*\*([A-D])\*\*", body)
     if not match:
         errors.append(f"`{decision_id}` recommendation must select an option using Choose **A**")
@@ -185,7 +190,7 @@ def _validate_recommendation(
 
 
 def _validate_owner_record(decision_id: str, state: str | None, block: str, errors: list[str]) -> None:
-    body = _subsection(block, "Owner decision record") or ""
+    body = subsection(block, "Owner decision record") or ""
     values: dict[str, str] = {}
     for label in OWNER_FIELDS:
         value = _bullet_field(body, label)
@@ -225,6 +230,23 @@ def _validate_owner_record(decision_id: str, state: str | None, block: str, erro
         errors.append(f"`{decision_id}` Applied item has pending Routing evidence")
 
 
+def _without_owner_text(text: str) -> str:
+    """``text`` with owner-authored values removed from every answered owner decision record."""
+
+    def strip_answered(match: re.Match[str]) -> str:
+        recorded_at = _bullet_field(match.group(2), "Recorded at") or ""
+        if not recorded_at or recorded_at.lower().startswith("pending"):
+            return match.group(0)
+        return match.group(1) + OWNER_TEXT_RE.sub("", match.group(2))
+
+    return re.sub(
+        r"(^#### Owner decision record\s*$\n)(.*?)(?=^#### |^### |\Z)",
+        strip_answered,
+        text,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+
+
 def validate_packet(text: str, require_review_ready: bool = False) -> list[str]:
     """Return every structural validation error in ``text``."""
     errors: list[str] = []
@@ -236,11 +258,11 @@ def validate_packet(text: str, require_review_ready: bool = False) -> list[str]:
     if not re.search(r"^\*\*Artifact boundary:\*\*\s*\S", text, re.MULTILINE):
         errors.append("missing Artifact boundary")
 
-    for placeholder in PLACEHOLDER_RE.findall(text):
+    for placeholder in PLACEHOLDER_RE.findall(_without_owner_text(text)):
         errors.append(f"unresolved placeholder `{placeholder}`")
 
     summary, summary_errors = _summary_rows(text)
-    blocks, block_errors = _section_blocks(text)
+    blocks, block_errors = section_blocks(text)
     errors.extend(summary_errors)
     errors.extend(block_errors)
 
@@ -251,7 +273,7 @@ def validate_packet(text: str, require_review_ready: bool = False) -> list[str]:
         errors.append(f"decision section `{decision_id}` has no matching summary row")
 
     for decision_id, block in blocks:
-        state = _field(block, "Decision state")
+        state = labeled_field(block, "Decision state")
         if state is None:
             errors.append(f"`{decision_id}` is missing Decision state")
         elif state not in ALL_STATES:
@@ -264,7 +286,7 @@ def validate_packet(text: str, require_review_ready: bool = False) -> list[str]:
             errors.append(f"`{decision_id}` is not ready for owner review (state: {state or 'missing'})")
 
         for heading in REQUIRED_SUBSECTIONS:
-            body = _subsection(block, heading)
+            body = subsection(block, heading)
             if body is None:
                 errors.append(f"`{decision_id}` is missing section: {heading}")
             elif not body:

@@ -57,6 +57,13 @@ Each `### \`stable-id\`` section contains:
 10. **Evidence** — concise `path:line`, canonical ID, URL, query, or command
    references sufficient for another agent to refresh the item.
 
+Optional, after Recommendation: **Diagram** — one image link,
+`![caption](relative/path.svg)`, when the options differ in architecture,
+data flow, or topology and a before/after picture decides faster than prose.
+Draw it with `/th-engineering` excalidraw-diagram (light theme, SVG) and keep
+the file beside the packet; the web page inlines it and refuses paths outside
+the packet's directory. Skip it for policy or wording decisions.
+
 Aim for 150-350 words per ordinary decision. Spend more only when options have
 materially different security, data, or architecture consequences. Put shared
 background once in a preface and link to it from items.

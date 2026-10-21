@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%228%22 fill=%22%23c96442%22/%3E%3Cpath d=%22M9 16.5l4.5 4.5L23 11.5%22 stroke=%22white%22 stroke-width=%223.2%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E">
+<title>${title}</title>
+<style>${css}</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to decisions</a>
+<header class="topbar">
+  <div class="topbar-in">
+    <span class="topbar-title">${title}</span>
+    <div class="progress" aria-label="Answer progress">
+      <span class="segments" aria-hidden="true">${segments}</span>
+      <span id="progress-text">0 of ${total} answered</span>
+    </div>
+    <button type="button" class="icon-btn" id="help-btn" aria-haspopup="dialog" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">?</button>
+  </div>
+</header>
+<div class="layout">
+  ${nav}
+  <main id="main">
+    <p class="banner banner-warn" id="revised" role="alert" hidden><strong>This packet was revised after the page loaded.</strong> Reload before answering further.</p>
+    ${banners}
+    ${main}
+  </main>
+</div>
+<dialog id="help" aria-labelledby="help-h">
+  <h2 id="help-h">Keyboard shortcuts</h2>
+  <table class="keys">
+    <tbody>
+      <tr><td><span class="kbd">j</span> <span class="kbd">k</span></td><td>Next / previous decision</td></tr>
+      <tr><td><span class="kbd">a</span>–<span class="kbd">d</span></td><td>Choose an option (again to clear)</td></tr>
+      <tr><td><span class="kbd">e</span></td><td>Edit an option</td></tr>
+      <tr><td><span class="kbd">h</span></td><td>Hold</td></tr>
+      <tr><td><span class="kbd">r</span></td><td>Reject every option</td></tr>
+      <tr><td><span class="kbd">n</span></td><td>Write a note</td></tr>
+      <tr><td><span class="kbd">s</span></td><td>Jump to submit</td></tr>
+      <tr><td><span class="kbd">?</span></td><td>This list</td></tr>
+    </tbody>
+  </table>
+  <form method="dialog"><button class="chip-btn">Close</button></form>
+</dialog>
+<script id="q-boot" type="application/json">${boot}</script>
+<script>${js}</script>
+</body>
+</html>
