@@ -85,3 +85,14 @@ def test_REQ_owner_questionnaire_007_walkthrough_ends_with_apply_offer():
     assert "### Update tracker artifacts" in INTERACTION
     assert "Do not force-close an item assigned to the\n   owner" in INTERACTION
     assert "re-ask trigger" in INTERACTION
+
+
+def test_REQ_owner_questionnaire_008_web_surface_is_scripted_and_ingested():
+    """Spec: REQ-owner-questionnaire-008."""
+    assert "questionnaire_web.py" in SKILL
+    assert "QUESTIONNAIRE_URL=" in SKILL
+    assert "ingest" in SKILL
+    assert "## Web form channel" in INTERACTION
+    assert "`Needs-rework`" in INTERACTION
+    assert "apply_now" in INTERACTION
+    assert "never inside an item" in INTERACTION

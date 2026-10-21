@@ -79,3 +79,47 @@ Parity share: <x>% parity · <y>% justified · <z>% residue
 Next run cites the previous SHA and reports movement. `new 0 · reopened 0`
 on the remediated head is the loop closing — report it as such, not as
 "nothing found".
+
+## Owner dossier (closeout)
+
+Findings the audit may not land autonomously become one owner packet, built
+with
+[user-questionnaire](../../../../th-projects/subskills/user-questionnaire/SKILL.md)
+steps 2-7 (draft, fresh-subagent adversarial review, validate, serve) after
+the convergence record is written. Where the target has no `th-projects`
+shape, the reviewer judges scope and recommendation against the spec
+statement and the engineering bar.
+
+| Gate | Item shape | Decision ID |
+|---|---|---|
+| Rewrite-to-target on an externally consumed surface, or any trust-boundary, migration, or concurrency-model change | Rewrite to the sketch / incremental removals / keep as justified (name the constraint) / defer | `greenfield:rewrite:<surface>` |
+| `justified` row whose constraint amends doctrine or spec | Adopt the write-down as drafted / adopt with edit / reject (row becomes residue) | `greenfield:constraint:<surface>` |
+| Compat exception needing an owner and removal date | Accept the deprecation pair with the proposed date / shorter date / no exception (remove now) | `greenfield:compat:<consumer>` |
+
+Everything else is a bead, not a question. Decision IDs reuse the audit-key
+vocabulary so re-runs dedupe: an item answered in a prior packet (`Agreed`,
+`Rejected`, `Held` with its trigger unmet) is carried forward as
+`Superseded` only if its evidence changed; otherwise it is not re-asked, and
+`ledger.sh` lists prior packets for this repo.
+
+Packet home: `~/.tmp/user-questionnaire/<repo>-<date>-greenfield/packet.md`;
+each item's evidence cites the delta report and `file:line` at the audited
+SHA. Append to the convergence record:
+
+```
+Owner gates: <n> — packet <path>
+```
+
+```bash
+Q="<th-projects>/subskills/user-questionnaire/scripts"
+uv run "$Q/validate_questionnaire.py" "$PACKET" --require-review-ready
+uv run "$Q/questionnaire_web.py" serve "$PACKET"      # last line: QUESTIONNAIRE_URL=…
+```
+
+The report ends with that `QUESTIONNAIRE_URL=` line. The next session runs
+`questionnaire_web.py ingest "$PACKET"` first: `Agreed` items with
+`apply_now: true` route through `/th-projects` (feature-request amendment
+for spec write-downs, direction for rewrite epics); `Rejected` rewrite items
+fall back to the incremental beads already filed; `Held` items note their
+trigger on the surface's epic. No owner gates this run → write
+`Owner gates: 0` and publish nothing.

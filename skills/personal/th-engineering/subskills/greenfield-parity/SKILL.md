@@ -14,7 +14,7 @@ metadata:
     - Claude Fable 5.1
   status: active
   last_reviewed: "2026-10-21"
-compatibility: idempotent-audit requires the bd CLI, jq, and a Beads-backed repository; the delta workflow needs none.
+compatibility: idempotent-audit requires the bd CLI, jq, and a Beads-backed repository; the delta workflow needs none. The closeout owner dossier uses th-projects/subskills/user-questionnaire scripts (uv, Python 3.11+) and a subagent for adversarial review.
 ---
 
 # Greenfield Parity
@@ -83,13 +83,24 @@ erode the backlog faster than they improve the code.
 7. **Fix-it-now inside a change.** Applied during implementation rather
    than an audit, leaf residue inside the change's scope is removed in that
    change; only what exceeds the scope is filed (router invariant).
+8. **Owner gates end in a dossier, not a bead.** What the audit cannot
+   decide alone — a rewrite-to-target on an externally consumed surface,
+   a trust-boundary, migration, or concurrency-model change, a `justified`
+   row whose constraint amends doctrine, a compat exception needing an
+   owner and removal date — becomes one
+   [user-questionnaire](../../../th-projects/subskills/user-questionnaire/SKILL.md)
+   packet at closeout, adversarially reviewed and served as a web form; the
+   report ends with its `QUESTIONNAIRE_URL=` line
+   ([idempotent-audit § Owner dossier](./references/idempotent-audit.md#owner-dossier-closeout)).
+   Questionnaire items dedupe like beads: a prior packet's answered item is
+   not re-asked unless its evidence changed. No owner gates → say so.
 
 ## Read Order
 
 | File | Read when | Content |
 |---|---|---|
 | [`references/delta-workflow.md`](./references/delta-workflow.md) | Judging complexity against the spec | Spec statement → interface-first sketch → inventory → delta table; residue classes; compat-exception path; finding contract; rewrite rule |
-| [`references/idempotent-audit.md`](./references/idempotent-audit.md) | Filing findings as beads | Ledger, reconciliation states, audit-key, progressive ordering, convergence record |
+| [`references/idempotent-audit.md`](./references/idempotent-audit.md) | Filing findings as beads; closing out | Ledger, reconciliation states, audit-key, progressive ordering, convergence record, owner dossier questionnaire |
 
 [`scripts/ledger.sh`](./scripts/ledger.sh) `[repo_root] [closed_limit]`
 builds the already-known ledger (open/in-progress, recently closed,
@@ -106,9 +117,10 @@ stays beads-writer's contract; this skill adds only dedupe and ordering.
   gets a note, not a state change.
 - A rewrite-to-target on a surface with a verified external consumer, or any
   trust-boundary, migration, or concurrency-model change, is a scope
-  change: it returns to `/th-projects` at the governing spec/allocation gate
-  (`beads-orchestration/references/decision-autonomy.md`), not a bead filed
-  silently.
+  change: it goes to the owner through the closeout questionnaire (rule 8)
+  and from there to `/th-projects` at the governing spec/allocation gate
+  (`beads-orchestration/references/decision-autonomy.md`), never a bead
+  filed silently.
 
 ## Trigger Sanity Check
 

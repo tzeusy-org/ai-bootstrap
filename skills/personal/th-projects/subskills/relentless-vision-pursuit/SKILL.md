@@ -14,13 +14,15 @@ metadata:
   authors:
     - tze
     - Claude Fable 5
+    - Claude Fable 5.1
   status: active
-  last_reviewed: "2026-09-27"
+  last_reviewed: "2026-10-21"
 compatibility: >
   Needs repo-root access and doctrine (about/heart-and-soul/). Audit and
   ideation lanes want a subagent facility with session continuation, plus bd
   (beads). Both degrade: small projects run everything inline, sequentially,
-  and without bd the ranked move list stays in the dossier.
+  and without bd the ranked move list stays in the dossier. The closeout
+  questionnaire uses ../user-questionnaire/ scripts (uv, Python 3.11+).
 ---
 
 # Relentless Vision Pursuit
@@ -121,11 +123,25 @@ discipline §3). Produce:
 
 ## Phase 4 — Deliverables
 
-Dossier + data JSON, gated beads epic, and a memory line — formats and the
-gate protocol in
+Dossier + data JSON, gated beads epic, the owner dossier questionnaire, and a
+memory line — formats and the gate protocol in
 [`references/pursuit-deliverables.md`](references/pursuit-deliverables.md).
 A pursuit run is *planning, never execution*: nothing it files may be
 runnable until the owner releases the gate.
+
+## Phase 5 — Owner dossier questionnaire (closeout)
+
+The run ends by handing the owner its hard gates as one
+[`../user-questionnaire/SKILL.md`](../user-questionnaire/SKILL.md) packet,
+published as a web form: gate-release scope, each vision-extending move's
+doctrine amendment, any external-contract waiver, and nothing else. Items
+are drafted, adversarially reviewed by a fresh subagent, validated, and
+served by script; the final report ends with the printed `QUESTIONNAIRE_URL=`
+line. Admission rules, item shapes, and what the next session does with the
+answers are in
+[`references/pursuit-deliverables.md`](references/pursuit-deliverables.md)
+§ Owner dossier questionnaire. A run with no owner gates says so instead of
+inventing items.
 
 ## Execution discipline
 
@@ -140,7 +156,11 @@ cadence/resume hygiene. Violating one is a defect in the run, not a style choice
   `../project-feature-request/SKILL.md` funnel as fuzzy input;
   vision-extending moves enter knowing Gate 2 requires doctrine amendment
   or rejection.
-- **Gate release** → the owner's move; execution belongs to
+- **Gate release** → the owner's move, recorded through the closeout
+  questionnaire; the applying session closes the gate only on an `Agreed`
+  release answer with `apply_now`. Execution belongs to
   `/beads-orchestration` (beads-coordinator), never to this skill.
+- **Owner answers** → the next session runs `questionnaire_web.py ingest`
+  before anything else and routes per the user-questionnaire apply checklist.
 - **Next run** verifies this run's shipped moves via a scoped
   `../project-review/SKILL.md` pass (Phase 0 step 5).

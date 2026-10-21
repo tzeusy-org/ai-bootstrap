@@ -65,9 +65,48 @@ pursuit run and an unsanctioned fleet launch.
 No bd in the repo → the ranked move list stays in the dossier and the run
 stops there; do not improvise a tracker.
 
+## Owner dossier questionnaire
+
+The run's hard human gates leave as one owner packet, built and published
+with [`../../user-questionnaire/SKILL.md`](../../user-questionnaire/SKILL.md)
+(steps 2-7: draft, independent adversarial review, validate, serve). The
+pursuit author never self-reviews the items.
+
+Admit exactly these, each as one item with 2-4 options and the dossier's
+recommendation:
+
+| Gate | Item shape | Decision ID |
+|---|---|---|
+| Gate release scope | Release the whole epic / the top-N moves named / hold the gate | `pursuit-<date>-release` |
+| Doctrine amendment behind a vision-extending move | Adopt the amendment as drafted / adopt with edit / reject (move drops) / defer | `pursuit-<date>-amend-<move-key>` |
+| External consumer contract a move would change | Waive with migration plan / keep the contract (move narrows) / defer | `pursuit-<date>-contract-<move-key>` |
+| Anything Phase 3 classified as a hard human gate | Per decision-autonomy.md | `pursuit-<date>-<key>` |
+
+Ordinary moves are not questions; their priority is the dossier's job and
+their execution is the fleet's. If the run produced no such gates, write
+"No owner gates this run" in the dossier and skip the packet.
+
+Packet home: `~/.tmp/user-questionnaire/<repo>-<date>-pursuit/packet.md`.
+Each item's evidence cites the dossier JSON by pinned commit
+(`<sha>:<path>`), and the dossier md links the packet path.
+
+```bash
+Q="<th-projects>/subskills/user-questionnaire/scripts"
+uv run "$Q/validate_questionnaire.py" "$PACKET" --require-review-ready
+uv run "$Q/questionnaire_web.py" serve "$PACKET"      # last line: QUESTIONNAIRE_URL=…
+```
+
+The final report ends with that `QUESTIONNAIRE_URL=` line. The next session
+(or the apply session) starts with `questionnaire_web.py ingest "$PACKET"`:
+an `Agreed` release item with `apply_now: true` lets the applying agent close
+the gate bead, citing the decision record in the close reason; adopted
+amendments route to `../../project-shape/`; a rejected amendment removes its
+move from the epic; `Held` items keep the gate closed and note the re-ask
+trigger on the gate bead.
+
 ## Memory
 
 Write or update one durable memory (`bd remember` where available,
 otherwise a `reference` memory) holding the dossier path, epic id, gate id,
-and artifact URL if one was published; link the prior pursuit's memory so
-runs form a chain.
+questionnaire packet path and URL, and artifact URL if one was published;
+link the prior pursuit's memory so runs form a chain.

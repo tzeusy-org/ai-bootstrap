@@ -287,6 +287,8 @@ QUESTIONNAIRE_SKILL="$QUESTIONNAIRE_DIR/SKILL.md"
 QUESTIONNAIRE_REVIEW="$QUESTIONNAIRE_DIR/references/adversarial-review.md"
 QUESTIONNAIRE_TEMPLATE="$QUESTIONNAIRE_DIR/assets/questionnaire-template.md"
 QUESTIONNAIRE_VALIDATOR="$QUESTIONNAIRE_DIR/scripts/validate_questionnaire.py"
+QUESTIONNAIRE_WEB="$QUESTIONNAIRE_DIR/scripts/questionnaire_web.py"
+QUESTIONNAIRE_INTERACTION="$QUESTIONNAIRE_DIR/references/interaction-and-application.md"
 QUESTIONNAIRE_VALID_FIXTURE="$QUESTIONNAIRE_DIR/tests/fixtures/review-ready.md"
 
 check_pattern "$ROUTER" 'VISION.*continuous constraint' \
@@ -352,6 +354,19 @@ if require_file "$QUESTIONNAIRE_SKILL" \
     "user questionnaire: engineering bar is loaded"
   check_pattern "$QUESTIONNAIRE_SKILL" '--require-review-ready' \
     "user questionnaire: review-ready validation is required"
+  check_pattern "$QUESTIONNAIRE_SKILL" 'questionnaire_web.py.* serve' \
+    "user questionnaire: web review surface is published by script"
+  check_pattern "$QUESTIONNAIRE_SKILL" 'QUESTIONNAIRE_URL=' \
+    "user questionnaire: handoff ends with the URL line"
+  check_pattern "$QUESTIONNAIRE_SKILL" 'questionnaire_web.py.* ingest' \
+    "user questionnaire: asynchronous answers are ingested by script"
+fi
+if require_file "$QUESTIONNAIRE_INTERACTION" \
+    "user-questionnaire/references/interaction-and-application.md exists"; then
+  check_pattern "$QUESTIONNAIRE_INTERACTION" '^## Web form channel' \
+    "user questionnaire: web form channel is documented"
+  check_pattern "$QUESTIONNAIRE_INTERACTION" 'Edits the choice.*Needs-rework' \
+    "user questionnaire: edited web answers return to review"
 fi
 if require_file "$QUESTIONNAIRE_REVIEW" \
     "user-questionnaire/references/adversarial-review.md exists"; then
@@ -364,6 +379,8 @@ require_file "$QUESTIONNAIRE_TEMPLATE" \
   "user-questionnaire/assets/questionnaire-template.md exists"
 require_file "$QUESTIONNAIRE_VALIDATOR" \
   "user-questionnaire/scripts/validate_questionnaire.py exists"
+require_file "$QUESTIONNAIRE_WEB" \
+  "user-questionnaire/scripts/questionnaire_web.py exists"
 
 # ── 5. user-questionnaire validator tests ────────────────────────────────────
 section "user-questionnaire validator tests"
@@ -385,6 +402,17 @@ if [[ -f "$QUESTIONNAIRE_VALIDATOR" ]]; then
   else
     _fail "user-questionnaire: review-ready fixture failed CLI gate (exit $rc): $out"
   fi
+
+  rc=0
+  web_tmp=$(mktemp -d)
+  out=$(QUESTIONNAIRE_STATE_ROOT="$web_tmp" uv run "$QUESTIONNAIRE_WEB" render \
+    "$QUESTIONNAIRE_VALID_FIXTURE" --out "$web_tmp/page.html" 2>&1) || rc=$?
+  if [[ $rc -eq 0 ]] && grep -q 'id="item-dec-auth"' "$web_tmp/page.html"; then
+    _pass "user-questionnaire: web surface renders the review-ready fixture"
+  else
+    _fail "user-questionnaire: web surface render failed (exit $rc): $out"
+  fi
+  rm -rf "$web_tmp"
 fi
 
 # ── 6. spec-trace-check fixtures ─────────────────────────────────────────

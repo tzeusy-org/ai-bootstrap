@@ -10,6 +10,40 @@ unknowns, and validation result. Do not paste the whole packet into chat. The
 document must be sufficient for a fresh agent to resume without author-only
 context.
 
+## Web form channel
+
+`scripts/questionnaire_web.py serve <packet>` publishes the packet as a local
+web form and prints its URL; the owner answers whenever they like. The page
+presents the same five elements per item as the chat walkthrough, keeps
+every item independent, and asks the apply offer as its own final control,
+never inside an item. Answers persist as JSON under
+`~/.tmp/user-questionnaire/` (override with `QUESTIONNAIRE_STATE_ROOT`),
+atomically written, keyed by the packet's absolute path so any session can
+find them. The URL carries a random token; the page is reachable to anyone
+holding the link on the bound interfaces, which is why packets never carry
+secrets.
+
+`status <packet>` reports progress (exit 0 only after the owner submitted;
+`--wait N` polls). `ingest <packet>` writes the answers into the packet:
+
+| Owner action on the page | Item state | Owner decision record |
+|---|---|---|
+| Picks option A-D | `Agreed` | Choice `A` (+ note); post-answer review not required |
+| Edits the choice | `Needs-rework` | Choice `Edited: …`; fresh scope and recommendation passes required before routing |
+| Hold / defer | `Held` | Choice `Deferred: <reason>`; the reason is the re-ask trigger |
+| Reject all | `Rejected` | Choice `Rejected: <reason>` |
+
+Every record carries the actor/channel (`owner via questionnaire web form`,
+token-gated, source address), the ISO timestamp the page recorded, the
+unchanged authorization boundary, `Canonical destination: Unrouted` until the
+applying agent names the owning workflow, and `Routing evidence: Not routed`.
+`ingest` refuses when the packet changed since it was served (`--force` to
+override after re-validating the framing) or when the owner has not
+submitted (`--partial` ingests the answered items only). Its output's
+`apply_now` field is the owner's answer to the apply offer: `true` authorizes
+the routing checklist below for exactly this packet's `Agreed` and `Held`
+items; `false` or `null` leaves them recorded.
+
 ## One-question walkthrough
 
 For each item, present:

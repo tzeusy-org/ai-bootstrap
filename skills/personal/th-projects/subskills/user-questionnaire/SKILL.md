@@ -2,21 +2,25 @@
 name: user-questionnaire
 description: >
   Use to accumulate genuine owner decisions into a local asynchronous review
-  packet, walk the owner through that packet one question at a time, or route
-  recorded signoffs through canonical owning workflows. Every problem
-  scope and recommendation receives a separate adversarial verdict from an
-  independent subagent against the target project's th-projects shape and
-  th-engineering bar before it is review-ready. Triggers: "prepare decisions
-  for me to review", "review when I wake up", "walk me through the blocked
-  decisions", "collect owner signoffs", "decision packet", "questionnaire".
+  packet, publish that packet as a local web form the owner answers in a
+  browser, walk the owner through it one question at a time, ingest the
+  recorded answers in a later session, or route recorded signoffs through
+  canonical owning workflows. Every problem scope and recommendation receives
+  a separate adversarial verdict from an independent subagent against the
+  target project's th-projects shape and th-engineering bar before it is
+  review-ready. Triggers: "prepare decisions for me to review", "review when
+  I wake up", "publish the questionnaire", "give me a link to review", "walk
+  me through the blocked decisions", "ingest my answers", "collect owner
+  signoffs", "decision packet", "questionnaire".
 metadata:
   owner: tze
   authors:
     - tze
     - OpenAI Codex
+    - Claude Fable 5.1
   status: active
-  last_reviewed: "2026-08-13"
-compatibility: Requires local file access; review-ready packets require a subagent facility. The mandatory validator runs with uv and Python 3.11+.
+  last_reviewed: "2026-10-21"
+compatibility: Requires local file access; review-ready packets require a subagent facility. The validator and the web review surface run with uv and Python 3.11+, stdlib only; the web surface binds a local TCP port and prints a tailnet or FQDN URL.
 ---
 
 # User Questionnaire
@@ -40,6 +44,7 @@ from ordinary engineering judgment. Admit a question only when a human must:
 
 Do not questionnaire implementation details an agent can resolve from doctrine,
 specs, evidence, and the engineering bar. Do not infer approval from silence.
+A run that produced no owner gates publishes nothing and says so.
 
 ## Build and review the packet
 
@@ -65,9 +70,11 @@ specs, evidence, and the engineering bar. Do not infer approval from silence.
    on the corrected artifact. If no subagent facility is available, leave it
    `Draft` and report the missing gate.
 5. **Accumulate locally.** Write one local ignored `.md` packet unless the user
-   names another location. Keep stable IDs and update in place so another agent
-   can resume. Before writing under a Git worktree, verify the intended path
-   with `git check-ignore --no-index --quiet -- <path>`; otherwise choose an
+   names another location. The default home is outside any worktree:
+   `~/.tmp/user-questionnaire/<repo>-<date>/packet.md`. Keep stable IDs and
+   update in place so another agent can resume. Before writing under a Git
+   worktree instead, verify the intended path with
+   `git check-ignore --no-index --quiet -- <path>`; otherwise choose an
    ignored local directory or ask for one. Never place secrets, tokens, or
    owner-private values in it.
 6. **Validate before handoff.** Run
@@ -81,10 +88,45 @@ specs, evidence, and the engineering bar. Do not infer approval from silence.
 
    Resolve every error; the validator is structural evidence, not semantic
    review.
+7. **Publish the web review surface.** Run
+   [`scripts/questionnaire_web.py`](scripts/questionnaire_web.py) `serve`; it
+   renders the validated packet as a self-contained HTML form, starts a
+   background server on a random open port, persists answers under
+   `~/.tmp/user-questionnaire/`, and prints the URL. Re-running it for the
+   same packet reuses the running server, so the command is idempotent.
+
+   ```bash
+   uv run "$QUESTIONNAIRE_SKILL_DIR/scripts/questionnaire_web.py" serve \
+     /absolute/path/to/packet.md            # prints JSON, then QUESTIONNAIRE_URL=…
+   ```
+
+   The handoff report ends with that `QUESTIONNAIRE_URL=` line, the packet
+   path, item count, evidence snapshot, and unresolved unknowns. Do not
+   paste the packet into chat. The page is the owner's walkthrough: one card
+   per item with the recommendation, options, hold/reject/edit controls, and a
+   separate final submit-and-apply question. No LLM tokens are spent after
+   this command.
 
 ## Walk the owner through it
 
-When the owner returns, load
+**Asynchronous answers arrive through the web form.** A later session starts
+by ingesting them, then proceeds exactly as if it had recorded them in chat:
+
+```bash
+uv run "$QUESTIONNAIRE_SKILL_DIR/scripts/questionnaire_web.py" status /abs/packet.md   # exit 0 once submitted; --wait N polls
+uv run "$QUESTIONNAIRE_SKILL_DIR/scripts/questionnaire_web.py" ingest /abs/packet.md   # writes owner records into the packet
+```
+
+`ingest` maps each answer into the item's owner decision record and state
+(picked option → `Agreed`, hold → `Held`, reject → `Rejected`, edited option →
+`Needs-rework`), refuses a packet that changed since it was served, re-runs
+the validator, and reports `apply_now`. Edited items go back through steps 3-4
+before routing. `apply_now: true` is the owner's explicit apply instruction
+for exactly this packet's `Agreed` and `Held` items; `false` or `null` leaves
+them recorded and unrouted. Details and the mapping table are in
+[`references/interaction-and-application.md`](references/interaction-and-application.md).
+
+**Live walkthrough in chat.** When the owner is present instead, load
 [`references/interaction-and-application.md`](references/interaction-and-application.md).
 Ask exactly one decision at a time in priority/dependency order. Lead with the
 decision needed and recommendation, then give concise background and options
@@ -101,7 +143,8 @@ review instead of pressuring the owner to answer a stale question.
 recorded, ask once, as its own question, whether to apply the recorded
 decisions now. A "yes" is the explicit apply instruction for exactly the
 `Agreed` and `Held` items in this packet; a "no" or silence leaves them
-recorded and unrouted. Never fold the offer into an item's question.
+recorded and unrouted. Never fold the offer into an item's question. The web
+form asks it as its own final control for the same reason.
 
 ## Route recorded decisions
 
@@ -122,7 +165,8 @@ Applying is finished only when the tracker reflects every routed decision
 updated work item carrying its decision record and boundary, each `Held` item's
 re-ask trigger is noted on the trigger item, affected existing items carry a
 note, and the packet's routing evidence names those IDs. Then re-run the
-validator without `--require-review-ready` and report what was routed.
+validator without `--require-review-ready`, stop the web server
+(`questionnaire_web.py stop`), and report what was routed.
 
 ## Do not use when
 

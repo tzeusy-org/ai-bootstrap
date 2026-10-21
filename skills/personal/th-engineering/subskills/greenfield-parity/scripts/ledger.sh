@@ -22,4 +22,13 @@ echo; echo "## Prior review packets"
 ls docs/reviews/ 2>/dev/null || echo "(none)"
 echo; echo "## Last convergence record"
 last="$(ls docs/reviews/*greenfield-delta.md 2>/dev/null | sort | tail -1 || true)"
-[ -n "$last" ] && grep -E '^(Audited|Findings|Parity share):' "$last" || echo "(none — first run)"
+[ -n "$last" ] && grep -E '^(Audited|Findings|Parity share|Owner gates):' "$last" || echo "(none — first run)"
+echo; echo "## Prior owner questionnaires (packets + answers)"
+qroot="${QUESTIONNAIRE_STATE_ROOT:-$HOME/.tmp/user-questionnaire}"
+repo="$(basename "$(pwd -P)")"
+found=0
+for d in "$qroot"/*"$repo"*greenfield*/ "$qroot"/*"$repo"*greenfield*; do
+  [ -e "$d" ] || continue; found=1
+  echo "$d"; [ -f "$d/answers.json" ] && jq -r '"  completed: \(.completed_at // "no") apply_now: \(.apply_now) answered: \(.items | length)"' "$d/answers.json"
+done
+[ "$found" = 1 ] || echo "(none)"
