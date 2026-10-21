@@ -1,8 +1,10 @@
 """Browser tier: page.js behavior against a real server in headless Chromium.
 
-Skips unless Playwright and a Chromium build are available. Run it with:
+Skips unless Playwright and a Chromium build are available. The package gate
+(th-projects/scripts/validate-th-projects.sh) runs it with a pinned Playwright
+and reports a skip. Standalone:
 
-    uv run --with pytest --with playwright pytest -q tests/test_page_browser.py
+    uv run --with pytest --with playwright==1.61.0 pytest -q tests/test_page_browser.py
 
 PLAYWRIGHT_CHROMIUM may point at a Chromium executable when the bundled
 browser for the installed Playwright version is not downloaded.

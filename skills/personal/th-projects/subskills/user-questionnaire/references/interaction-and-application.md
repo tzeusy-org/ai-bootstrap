@@ -55,8 +55,9 @@ and diagrams inlined), so it works offline. Layout and behavior:
 The page is rendered by [`scripts/questionnaire_page.py`](../scripts/questionnaire_page.py)
 from [`assets/web/`](../assets/web/) (`page.html`, `page.css`, `page.js`);
 change the look there, not in the server. `tests/test_page_browser.py`
-drives `page.js` in headless Chromium; it skips unless Playwright is present
-(`uv run --with pytest --with playwright pytest -q tests`).
+drives `page.js` in headless Chromium. `validate-th-projects.sh` runs it with
+a pinned Playwright and prints a `SKIP:` line when no Chromium launches;
+`PLAYWRIGHT_CHROMIUM` points it at a specific build.
 
 Answers persist as JSON under `~/.tmp/user-questionnaire/` (override with
 `QUESTIONNAIRE_STATE_ROOT`), atomically written, keyed by the packet's

@@ -386,12 +386,19 @@ require_file "$QUESTIONNAIRE_WEB" \
 section "user-questionnaire validator tests"
 
 if [[ -f "$QUESTIONNAIRE_VALIDATOR" ]]; then
+  # Pinned so the driver matches a cached Chromium build (chromium-1228);
+  # test_page_browser.py falls back to any cached build when it does not.
   rc=0
-  out=$(uv run --with pytest pytest -q "$QUESTIONNAIRE_DIR/tests" 2>&1) || rc=$?
+  out=$(uv run --with pytest --with playwright==1.61.0 \
+    pytest -q -rs "$QUESTIONNAIRE_DIR/tests" 2>&1) || rc=$?
   if [[ $rc -eq 0 ]]; then
-    _pass "user-questionnaire: validator tests pass"
+    _pass "user-questionnaire: validator, page, and browser tests pass"
   else
-    _fail "user-questionnaire: validator tests failed (exit $rc): $out"
+    _fail "user-questionnaire: tests failed (exit $rc): $out"
+  fi
+  # A browser tier that cannot launch Chromium skips; say so instead of passing quietly.
+  if skipped=$(grep -m1 'SKIPPED.*test_page_browser' <<<"$out"); then
+    echo "  SKIP: user-questionnaire: browser tier did not run: ${skipped##*: }"
   fi
 
   rc=0
