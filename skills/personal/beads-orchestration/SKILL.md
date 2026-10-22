@@ -8,7 +8,7 @@ metadata:
     - OpenAI Codex
     - Claude Fable 5.1
   status: active
-  last_reviewed: "2026-10-04"
+  last_reviewed: "2026-10-22"
 compatibility: Requires bd (beads) CLI v1.0.4+, git, and a Beads-backed repository. Execution subskills additionally require gh (authenticated), jq, python3, and git worktree support.
 ---
 

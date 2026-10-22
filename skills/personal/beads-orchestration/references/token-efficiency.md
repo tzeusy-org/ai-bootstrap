@@ -17,9 +17,11 @@ and 2× on the 1-hour TTL. Caches are **per model and per session prefix**, so a
 fresh subagent starts cold: it pays the write premium on every token it has to
 load (guidance, skills, spec slice, the code it explores) and then re-reads
 them on every turn. A continuing session that already holds that context
-re-reads it at 1/20th of the price. On Claude, Opus 5.5's cache read
-($0.20/MTok) costs the same as Sonnet 5's, so for a long session where cache
-reads dominate, dropping to Sonnet only saves on uncached input and output.
+re-reads it at 1/20th of the price. On Claude, Sonnet 5.5 costs half of Opus
+5.5 on every token class, cache reads included ($0.10 vs $0.20/MTok), so
+dropping a cache-read-dominated lane to Sonnet halves its cost. Haiku 5.5 is
+about 1/20th of Sonnet 5.5 but bills prompts over 100K tokens at 5x, so keep it
+to short one-shot dispatches.
 
 Twenty parallel fresh sessions pay the context-loading cost twenty times.
 A small number of long-lived sessions pay it once and then run on reads.

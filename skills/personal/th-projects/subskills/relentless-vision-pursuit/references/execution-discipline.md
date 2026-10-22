@@ -68,9 +68,9 @@ lane or one-off task to its hardest recurring work:
 | Audit lane (scoped critique against a known bar, then cross-cutting sweeps) | `opus` | `medium` |
 | One-shot mechanical passes (surface scoping, ledger-dedup extraction, wiring checks) | `haiku`, or inline in the orchestrator | `low` |
 
-On Opus 5.5, a warm lane's cache reads cost the same per token as Sonnet 5's,
-so the audit lane runs on `opus` at `medium` effort rather than dropping to
-`sonnet`. When genuinely unsure which tier a lane needs, round **up**: a weak
+Sonnet 5.5 costs half of Opus 5.5 on every token class, warm cache reads
+included, so the audit lane's `opus` at `medium` is a deliberate quality choice
+for critique, not a free one; revisit it if audits prove routine. When genuinely unsure which tier a lane needs, round **up**: a weak
 plan costs more than the model that would have made a good one.
 
 ## 3. Checkpoint every unit to disk

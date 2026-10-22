@@ -138,12 +138,12 @@ then update this reference and its contract test in the same change.
 
 | Strategy | Claude | Codex / ChatGPT | Gemini |
 |---|---|---|---|
-| `EPIC_COMPLEXITY_MODEL` | Opus 5.5 High | GPT-6.1 Sol XHigh | gemini-3-pro |
-| `HIGH_COMPLEXITY_MODEL` | Opus 5.5 Medium | GPT-6.1 Sol High | gemini-3-pro |
-| `MEDIUM_COMPLEXITY_MODEL` | Sonnet 5.5 High | GPT-6.1 Sol High | gemini-3-pro |
-| `LOW_COMPLEXITY_MODEL` | Sonnet 5.5 Low | GPT-6.1 Sol Low | gemini-3-flash-preview |
-| `TRIVIAL_COMPLEXITY_MODEL` | Sonnet 5.5 Low | GPT-6 Luna Max | gemini-3-flash-preview |
-| `DESIGN_AND_SPECIFICATION_MODEL` | Opus 5.5 High | GPT-6.1 Sol XHigh | gemini-3-pro |
+| `EPIC_COMPLEXITY_MODEL` | Opus 5.5 High | GPT-6.1 Sol XHigh | gemini-4-argon |
+| `HIGH_COMPLEXITY_MODEL` | Opus 5.5 Medium | GPT-6.1 Sol High | gemini-4-argon |
+| `MEDIUM_COMPLEXITY_MODEL` | Sonnet 5.5 High | GPT-6.1 Sol High | gemini-4-argon |
+| `LOW_COMPLEXITY_MODEL` | Sonnet 5.5 Low | GPT-6.1 Sol Low | gemini-3.8-flash |
+| `TRIVIAL_COMPLEXITY_MODEL` | Haiku 5.5 Low | GPT-6 Luna Max | gemini-3.8-flash |
+| `DESIGN_AND_SPECIFICATION_MODEL` | Opus 5.5 High | GPT-6.1 Sol XHigh | gemini-4-argon |
 
 These are deliberate local choices over the vendors' starting-point guidance.
 On Codex, Sol 6.1 is the workhorse and Luna is reserved for trivial work.
@@ -155,26 +155,34 @@ non-trivial Codex model: do not dispatch Astra or Terra. Escalation on Codex is
 an effort step within Sol (Low -> High -> XHigh), never a model-family switch.
 
 Anthropic recommends starting Opus 5.5 at its default `medium` effort and
-tuning against task-specific evals. This policy uses Sonnet 5.5 for the
-cheap tiers (`low` effort for low/trivial work, `high` effort for medium work)
-and Opus 5.5 above them: `medium` for high work, `high` for epic or
-plan/specification drafting. Escalate after a shallow or failed attempt: low
-to medium tier first, then to Opus.
+tuning against task-specific evals. This policy mirrors the Codex split: Haiku
+5.5 (priced like Luna) for trivial work only, Sonnet 5.5 (priced like Sol) for
+low (`low` effort) and medium (`high` effort) work, and Opus 5.5 above them:
+`medium` for high work, `high` for epic or plan/specification drafting.
+Escalate after a shallow or failed attempt: low to medium tier first, then to
+Opus.
+
+Haiku 5.5 suits one-shot trivial dispatches, not long lanes: a prompt over
+100K tokens is billed at 5x its base rate, and it has no server-side refusal
+fallback. Never dispatch Haiku for anything that needs judgment. LOW stays on
+Sonnet until Haiku 5.5 has a track record on trivial beads.
 
 ### Claude Dispatch Binding
 
 Pass model and effort independently. Where the runtime accepts an effort
-argument, set it explicitly: both models default to `medium`, which would
-violate the Sonnet low/high and Opus high rows if omitted.
+argument, set it explicitly: defaults differ (Opus and Haiku `medium`,
+Sonnet `high`), so omitting it would violate the Haiku low, Sonnet low, and
+Opus high rows.
 
 | Policy choice | `model` | `effort` |
 |---|---|---|
+| Haiku 5.5 Low | `claude-haiku-5-5` | `low` |
 | Sonnet 5.5 Low | `claude-sonnet-5-5` | `low` |
 | Sonnet 5.5 High | `claude-sonnet-5-5` | `high` |
 | Opus 5.5 Medium | `claude-opus-5-5` | `medium` |
 | Opus 5.5 High | `claude-opus-5-5` | `high` |
 
-Claude Code's `Agent` tool takes `model` as a family alias (`sonnet`, `opus`)
+Claude Code's `Agent` tool takes `model` as a family alias (`haiku`, `sonnet`, `opus`)
 rather than the full ID, and has no per-dispatch effort argument: a subagent's
 effort comes from its agent definition (`.claude/agents/*.md` frontmatter or
 SDK `agents`). To hold a pairing there, dispatch an agent type whose

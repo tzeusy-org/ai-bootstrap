@@ -52,12 +52,12 @@ class BeadsCoordinatorWorkflowContractTests(unittest.TestCase):
         contents = SAFETY.read_text(encoding="utf-8")
         self.assertIn("| Strategy | Claude | Codex / ChatGPT | Gemini |", contents)
         for row in (
-            "| `EPIC_COMPLEXITY_MODEL` | Opus 5.5 High | GPT-6.1 Sol XHigh | gemini-3-pro |",
-            "| `HIGH_COMPLEXITY_MODEL` | Opus 5.5 Medium | GPT-6.1 Sol High | gemini-3-pro |",
-            "| `MEDIUM_COMPLEXITY_MODEL` | Sonnet 5.5 High | GPT-6.1 Sol High | gemini-3-pro |",
-            "| `LOW_COMPLEXITY_MODEL` | Sonnet 5.5 Low | GPT-6.1 Sol Low | gemini-3-flash-preview |",
-            "| `TRIVIAL_COMPLEXITY_MODEL` | Sonnet 5.5 Low | GPT-6 Luna Max | gemini-3-flash-preview |",
-            "| `DESIGN_AND_SPECIFICATION_MODEL` | Opus 5.5 High | GPT-6.1 Sol XHigh | gemini-3-pro |",
+            "| `EPIC_COMPLEXITY_MODEL` | Opus 5.5 High | GPT-6.1 Sol XHigh | gemini-4-argon |",
+            "| `HIGH_COMPLEXITY_MODEL` | Opus 5.5 Medium | GPT-6.1 Sol High | gemini-4-argon |",
+            "| `MEDIUM_COMPLEXITY_MODEL` | Sonnet 5.5 High | GPT-6.1 Sol High | gemini-4-argon |",
+            "| `LOW_COMPLEXITY_MODEL` | Sonnet 5.5 Low | GPT-6.1 Sol Low | gemini-3.8-flash |",
+            "| `TRIVIAL_COMPLEXITY_MODEL` | Haiku 5.5 Low | GPT-6 Luna Max | gemini-3.8-flash |",
+            "| `DESIGN_AND_SPECIFICATION_MODEL` | Opus 5.5 High | GPT-6.1 Sol XHigh | gemini-4-argon |",
         ):
             self.assertIn(row, contents)
         for binding in (
@@ -65,6 +65,7 @@ class BeadsCoordinatorWorkflowContractTests(unittest.TestCase):
             "| GPT-6.1 Sol Low | `gpt-6.1-sol` | `low` |",
             "| GPT-6.1 Sol High | `gpt-6.1-sol` | `high` |",
             "| GPT-6.1 Sol XHigh | `gpt-6.1-sol` | `xhigh` |",
+            "| Haiku 5.5 Low | `claude-haiku-5-5` | `low` |",
             "| Sonnet 5.5 Low | `claude-sonnet-5-5` | `low` |",
             "| Sonnet 5.5 High | `claude-sonnet-5-5` | `high` |",
             "| Opus 5.5 Medium | `claude-opus-5-5` | `medium` |",
@@ -75,6 +76,7 @@ class BeadsCoordinatorWorkflowContractTests(unittest.TestCase):
         self.assertIn("before the complexity-label fast path", contents)
         self.assertIn("never\ndispatch Luna for anything that needs judgment", contents)
         self.assertIn("do not dispatch Astra or Terra", contents)
+        self.assertIn("Never dispatch Haiku for anything that needs judgment", contents)
         for path in (WRITER, TOKEN_EFFICIENCY):
             self.assertIn("design/specification override", path.read_text(encoding="utf-8"))
 
