@@ -22,19 +22,25 @@ result, assignee, and heartbeat immediately before acting. A `partial` or
 
 ## Pass 1: Stale `in_progress` Beads
 
-Interpret each `claims` finding using the stall heartbeat, remote-branch, and
-unpublished-work fields.
+Interpret each `claims` finding using the stall heartbeat, `owner_live`,
+remote-branch, and unpublished-work fields. `owner_live` is true when the
+assignee holds a live registration in the coordinator registry; the scan reads
+it with `bd kv list --json` and reports `registry` errors as partial, falling
+back to heartbeats alone.
 
 | Evidence | Report recommendation |
 |---|---|
-| Fresh heartbeat | `preserve-live-claim` |
+| Fresh heartbeat, or `owner_live` | `preserve-live-claim` |
 | Git probe failed or worktree evidence is unavailable | `manual-triage` |
 | Unpublished work exists | `preserve-unpublished-work` |
 | Stale heartbeat with complete negative evidence | `release-claim-candidate` for coordinator verification |
 | Missing or malformed heartbeat | `manual-triage` |
 
 Never turn a failed Git probe into a release recommendation. If another actor
-has a fresh heartbeat, report manual triage and leave ownership unchanged.
+has a fresh heartbeat, report manual triage and leave ownership unchanged. A
+`release-claim-candidate` is evidence, not authority: the coordinator releases
+only the claims that `../../beads-coordinator/references/runtime-and-safety.md`
+→ "Adopt the dead, guarded" allows, with its guarded command.
 
 ## Pass 4: Blocked Beads Whose Blockers Are Closed
 
@@ -89,7 +95,8 @@ cleanup never does.
 
 `review_locks` distinguishes a live reviewer from a candidate stale lock:
 
-- fresh `in_progress` heartbeat with a worktree: `preserve-review-lock`
+- `in_progress` with a worktree and either a fresh heartbeat or a live
+  registered assignee: `preserve-review-lock`
 - stale or missing liveness evidence: `release-review-lock-candidate` for
   coordinator verification
 - malformed state: `manual-triage`

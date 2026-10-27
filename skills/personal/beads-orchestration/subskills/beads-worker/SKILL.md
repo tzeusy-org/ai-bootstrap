@@ -25,6 +25,13 @@ dispatcher; two writers on one bead leave state nobody can reconcile. So this
 skill does not coordinate, does not mutate Beads lifecycle state, and does not
 create hidden parallel implementation tracks under one claimed bead.
 
+A dispatch authorizes the bead's whole accepted scope: implementation, tests,
+ordinary corrections, commits, push, and the PR. Edit targets named in the
+prompt are guidance, not a fence, unless the prompt calls them an ownership
+boundary. Ask nothing for routine engineering choices; stop only for a change
+in scope, architecture, trust boundary, or authorization, or a capability you
+cannot reach (`../../references/decision-autonomy.md` hard gates).
+
 ## Use This Skill When
 
 - a coordinator dispatches one implementation bead

@@ -78,7 +78,11 @@ coordinator appends it to bead notes:
 ```
 
 The record is an audit trail, not a request for permission. A human can
-override later by reopening; nothing waits for them.
+override later by reopening; nothing waits for them. Write one record per real
+choice between alternatives, in plain words a cold reader can follow. Routine
+steps a dispatch already authorizes (implementing, testing, correcting,
+committing, pushing, opening the PR) and progress receipts are not decisions:
+they belong in the worker report and the PR, never as `[decision]` notes.
 
 ## Escalation Format (hard-gated decisions only)
 

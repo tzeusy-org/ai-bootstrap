@@ -6,8 +6,9 @@ metadata:
   authors:
     - tze
     - OpenAI Codex
+    - Claude Opus 5.5
   status: active
-  last_reviewed: "2026-10-04"
+  last_reviewed: "2026-10-27"
 compatibility: Requires a Beads-backed git repository with `bd`, `git`, `gh`, `jq`, and git worktree support. Authenticated GitHub access is required for report-only PR reconciliation.
 ---
 
@@ -59,9 +60,12 @@ become a competing doctrine.
 - **The coordinator is the sole mutation authority.** Cleanup never claims,
   releases, creates, closes, relabels, unblocks, removes a worktree, deletes a
   branch, or repairs Dolt. It reports evidence and recommendations only.
-- Never mutate a bead held by a live actor. Decide ownership by the bead's
-  `assignee` plus a fresh stall heartbeat, per
-  `../beads-coordinator/references/runtime-and-safety.md`.
+- Never mutate a bead held by a live actor. A holder is live when its bead
+  heartbeat is fresh or its assignee is a live registered coordinator (peers
+  sleeping between wakes let bead heartbeats lapse), per
+  `../beads-coordinator/references/runtime-and-safety.md` → "Parallel
+  Coordinators". Another coordinator's claims, worktrees, and PRs are not
+  orphans while it is live.
 - **Never mutate PR-review bead state from PR outcome.** Cleanup inspects PR
   state and reports the finding plus a recommended action; the coordinator's
   Step 0 is the sole PR-state mutator.

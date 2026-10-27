@@ -15,13 +15,23 @@ SKILL_ROOT = Path(__file__).resolve().parents[1]
 LOOP = SKILL_ROOT / "references" / "coordinator-loop.md"
 SAFETY = SKILL_ROOT / "references" / "runtime-and-safety.md"
 EPIC = SKILL_ROOT / "references" / "epic-coordination.md"
+COMMANDS = SKILL_ROOT / "references" / "commands.md"
 WRITER = SKILL_ROOT.parent / "beads-writer" / "SKILL.md"
 TOKEN_EFFICIENCY = SKILL_ROOT.parents[1] / "references" / "token-efficiency.md"
 NORMALIZER = SKILL_ROOT / "scripts" / "normalize_pr_review_state.py"
+RANKER = SKILL_ROOT / "scripts" / "rank_ready_work.py"
 REVIEW_FAILURE_PROTOCOL = (
     SKILL_ROOT.parent / "beads-pr-reviewer-worker" / "references" / "failure-protocol.md"
 )
 SKILL_AUDIT_WORKFLOW = SKILL_ROOT.parents[4] / ".github" / "workflows" / "skill-audit.yml"
+
+
+# A `bd` invocation that writes tracker state. Group 1 is whatever sits between
+# `bd` and the subcommand (global flags), group 2 the subcommand.
+BD_MUTATION = re.compile(
+    r"\bbd((?:\s+-C\s+\S+|\s+--actor\s+\S+)*)\s+"
+    r"(update|create|close|unclaim|dep add|dep remove|kv set|kv clear|epic close-eligible)(?=\s)"
+)
 
 
 class BeadsCoordinatorWorkflowContractTests(unittest.TestCase):
@@ -119,9 +129,9 @@ class BeadsCoordinatorWorkflowContractTests(unittest.TestCase):
 
     def test_correction_lane_temporarily_detaches_and_restores_review_gate(self) -> None:
         contents = LOOP.read_text(encoding="utf-8")
-        self.assertIn("bd dep remove <original-id> <review-id>", contents)
+        self.assertIn('bd --actor "$COORDINATOR_ID" dep remove <original-id> <review-id>', contents)
         self.assertIn("REVIEW_CORRECTION_MODE=yes", contents)
-        self.assertIn("bd dep add <original-id> <review-id>", contents)
+        self.assertIn('bd --actor "$COORDINATOR_ID" dep add <original-id> <review-id>', contents)
 
     def test_queue_membership_uses_entry_and_never_infers_rebase_from_absence(self) -> None:
         contents = LOOP.read_text(encoding="utf-8")
@@ -313,6 +323,50 @@ class BeadsCoordinatorWorkflowContractTests(unittest.TestCase):
         ):
             self.assertIn(phrase, docstring)
 
+    def test_selection_reads_the_finish_first_queue_and_its_docstring_contract(self) -> None:
+        loop = LOOP.read_text(encoding="utf-8")
+        self.assertTrue(RANKER.exists(), RANKER)
+        self.assertIn("scripts/rank_ready_work.py", loop)
+        self.assertIn("beads-work-queue/v1", loop)
+        self.assertIn("module docstring", loop)
+        docstring = RANKER.read_text(encoding="utf-8").split('"""', 2)[1]
+        for phrase in ("Ranking contract", "Fail-closed", "`beads.max_lanes`", "`needs-shaping`", "prerequisites first"):
+            self.assertIn(phrase, docstring)
+
+    def test_parallel_coordinators_section_owns_identity_registry_and_adoption(self) -> None:
+        safety = SAFETY.read_text(encoding="utf-8")
+        section = safety.split("## Parallel Coordinators", 1)[1].split("\n## ", 1)[0]
+        for phrase in ('--actor "$COORDINATOR_ID"', "beads.coordinator.", "beads.max_lanes", "--if-assignee", "extra_lanes"):
+            self.assertIn(phrase, section)
+
+    def test_every_documented_bd_mutation_carries_the_coordinator_actor(self) -> None:
+        # Without --actor, a claim falls back to the shared git identity and two
+        # coordinators read each other's claims as their own. A bare name such
+        # as `bd update` in prose is a mention, not a command, and is skipped.
+        for path in (LOOP, SAFETY, EPIC, COMMANDS):
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                for match in BD_MUTATION.finditer(line):
+                    with self.subTest(file=path.name, line=number):
+                        self.assertIn('--actor "$COORDINATOR_ID"', match.group(1), line.strip())
+
+    def test_registry_writes_and_releases_go_through_their_owners(self) -> None:
+        # Hand-written registry timestamps keep dead coordinators "live"; a
+        # `--status open` release keeps the old assignee on an idle bead.
+        for path in (LOOP, SAFETY, EPIC, COMMANDS):
+            contents = path.read_text(encoding="utf-8")
+            with self.subTest(file=path.name):
+                self.assertNotRegex(contents, r'kv (?:set|clear) "?beads\.coordinator\.')
+                self.assertNotRegex(contents, r"update <[a-z-]+> --status open")
+        loop = LOOP.read_text(encoding="utf-8")
+        for phrase in ("coordinator_registry.py register", "coordinator_registry.py deregister", "unclaim <id>"):
+            self.assertIn(phrase, loop)
+
+    def test_a_failed_ranking_dispatches_nothing(self) -> None:
+        step_one = LOOP.read_text(encoding="utf-8").split("## Step 1:", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("`status: fatal`: dispatch nothing this wake", step_one)
+        self.assertIn("three consecutive fatal", step_one)
+        self.assertNotIn("bd ready --json", step_one)
+
     def test_review_deduplication_uses_parsed_chronology_and_fails_closed(self) -> None:
         contents = LOOP.read_text(encoding="utf-8")
         self.assertIn("parsed creation chronology", contents)
@@ -328,6 +382,7 @@ class BeadsCoordinatorWorkflowContractTests(unittest.TestCase):
         )[0]
         for command in (
             "uv run skills/personal/beads-orchestration/subskills/beads-coordinator/tests/test_normalize_pr_review_state.py",
+            "uv run skills/personal/beads-orchestration/subskills/beads-coordinator/tests/test_rank_ready_work.py",
             "uv run skills/personal/beads-orchestration/subskills/beads-coordinator/tests/test_workflow_contract.py",
             "uv run skills/personal/beads-orchestration/subskills/beads-cleanup/tests/test_cleanup_scan.py",
             "uv run skills/personal/beads-orchestration/subskills/beads-pr-reviewer-worker/tests/test_skill_package.py",

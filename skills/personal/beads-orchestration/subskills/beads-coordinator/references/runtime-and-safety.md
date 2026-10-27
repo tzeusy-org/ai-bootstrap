@@ -7,11 +7,13 @@ Load this file before dispatching workers or mutating Beads state.
 Mutual exclusion comes from two real mechanisms, **not** from notes-based
 tokens:
 
-1. **Atomic claim** — `bd update <id> --claim` atomically sets the bead's
-   `assignee` to you and `status=in_progress` in one operation. It is idempotent
-   if you already hold it. This is the cross-actor mutual-exclusion primitive:
-   only one actor can win the `assignee`. Verify success from the command
-   result (`assignee` is this coordinator), not from a later reread.
+1. **Atomic claim** — `bd --actor "$COORDINATOR_ID" update <id> --claim`
+   atomically sets the bead's `assignee` to you and `status=in_progress` in one
+   operation. It is idempotent if you already hold it. This is the cross-actor
+   mutual-exclusion primitive: only one actor can win the `assignee`, and the
+   actor is whatever `--actor` resolves to, so it only excludes peers that use
+   distinct ids ("Parallel Coordinators" below). Verify success from the
+   command result (`assignee` is this coordinator), not from a later reread.
 2. **Worktree creation backstop** — `bd worktree create` fails when the
    `agent/<id>` branch already exists. This prevents a same-actor session from
    double-dispatching a bead it already has in flight. If worktree creation
@@ -19,7 +21,7 @@ tokens:
 
 Never model claiming as a read-then-write of a token in `notes`/`design`. There
 is no atomic conditional update / compare-and-swap via the notes field; that
-would be a read-then-write race. The `bd update --claim` flag is the atomic
+would be a read-then-write race. The `bd --actor "$COORDINATOR_ID" update --claim` flag is the atomic
 operation.
 
 ### Stall heartbeat (stall detection only)
@@ -33,7 +35,7 @@ never append duplicates):
 
 ```text
 [beads-heartbeat]
-owner=coordinator:<session-id>
+owner=<COORDINATOR_ID>
 last_heartbeat_at=<iso8601>
 [/beads-heartbeat]
 ```
@@ -61,11 +63,111 @@ renewal instead of paying one `bd update` per mutation):
 
 Ownership rule:
 - If the `assignee` is another actor, do not touch the bead — its claim wins.
-- If the bead is assigned to another actor but its heartbeat is expired past the
-  stall threshold, a recovery pass (cleanup or coordinator) may reclaim it:
-  re-claim with `bd update <id> --claim` and reset the heartbeat.
+- A bead held by another actor is adoptable only under "Parallel Coordinators"
+  → "Adopt the dead, guarded": no live registration for its assignee, and a
+  bead heartbeat past the stall threshold. Plain `--claim` refuses a populated
+  assignee anyway (`../../../references/known-errors.md`).
 - Never "win" a live foreign claim by writing a newer timestamp; the heartbeat
   does not arbitrate ownership.
+
+## Parallel Coordinators
+
+Several coordinators may run against one tracker at once (separate sessions,
+runtimes, or machines). The tracker is their only shared state. Each rule
+below stops one coordinator from duplicating or undoing another's work.
+
+- **Identity.** Mint one `COORDINATOR_ID` per run with
+  `uv run scripts/coordinator_registry.py new-id --runtime claude`
+  (`coordinator:<runtime>-<YYYYMMDD>-<8 hex>`, e.g.
+  `coordinator:claude-YYYYMMDD-xxxxxxxx`), and pass `--actor "$COORDINATOR_ID"`
+  on every `bd` command. Why: `--claim` assigns the bead to the resolved actor,
+  which otherwise falls back to `git user.name`; two coordinators sharing a git
+  identity would each read every claim as their own, and the atomic claim would
+  exclude nothing. Write the flag into each command: shell state, including an
+  exported `BEADS_ACTOR`, does not survive between tool calls on most runtimes.
+  The same id is the heartbeat `owner=` and the registry key.
+- **Registry.** [`../scripts/coordinator_registry.py`](../scripts/coordinator_registry.py)
+  is the only writer of your `beads.coordinator.<id>` kv entry; it computes
+  `expires_at` itself, because a hand-typed timestamp is how a dead coordinator
+  stays "live" for a day:
+
+  ```bash
+  REG="uv run scripts/coordinator_registry.py"
+  $REG register --repo-root "$REPO_ROOT" --id "$COORDINATOR_ID" --wake-minutes 30 --startup  # preflight
+  $REG register --repo-root "$REPO_ROOT" --id "$COORDINATOR_ID" --wake-minutes <planned delay> [--extra-lanes K]  # every wake
+  $REG deregister --repo-root "$REPO_ROOT" --id "$COORDINATOR_ID"  # on stop
+  ```
+
+  `--startup` exits 3 when the id is already live: mint a new id. `register`
+  skips the write while the stored expiry still covers the next wake, so
+  routine wakes add no tracker history. Pass `--extra-lanes K` while you run
+  lanes the tracker cannot see (Team Lead subworkers, `epic-coordination.md`)
+  so peers count them. A coordinator is live while its `expires_at` is in the
+  future (and no more than 3 hours ahead). Liveness is per coordinator, not
+  per bead, because a coordinator sleeping between cache-bounded wakes lets
+  bead heartbeats lapse, and a bead blocked on review carries no fresh
+  heartbeat at all. The same script's readers back `rank_ready_work.py` and
+  `beads-cleanup`.
+- **One lane budget.** The lane limit is global: the `beads.max_lanes` kv key,
+  else 4. A lane is an `in_progress` bead held by a `coordinator:` assignee,
+  plus each live coordinator's `extra_lanes`; `rank_ready_work.py` reports
+  `capacity.free`. Claims by humans or other tools are listed as
+  `capacity.other_claims` and do not spend the budget. Every claim needs
+  `free > 0`, including a lane continuing with its next bead (the lane's
+  previous bead already returned its slot when it left `in_progress`). Two
+  coordinators racing for the last lane can overshoot by one each; the next
+  freed lane absorbs it rather than being refilled. Only the owner sets the
+  key (`bd --actor "$COORDINATOR_ID" kv set beads.max_lanes <n>`); a
+  coordinator writes it only to relay an explicit owner instruction about the
+  total.
+- **One queue.** Every coordinator walks the same `rank_ready_work.py` queue.
+  A failed `--claim` means a peer won that bead: take the next row, never
+  retry or contest it.
+- **Mutate only what you own.** Step 0 PR reconciliation, decision sweeps,
+  shaping, review-bead creation, and closure act only on beads whose
+  `assignee` is you. A bead held by a live registered coordinator is never
+  touched, whatever its bead heartbeat says. Hold an epic's claim while
+  creating its children: child ids come from a per-parent counter that two
+  creators can race.
+- **A PR is one ownership unit.** The original bead, its `pr-review-task`
+  bead, and their worktrees belong to the coordinator holding the original.
+  Create the review bead with `--assignee "$COORDINATOR_ID"`, dispatch a
+  review bead only while you hold its original, and adopt the two together.
+  A peer never picks up your review bead, because `rank_ready_work.py` keeps
+  `pr-review` work out of the shared queue.
+- **Adopt the dead, guarded.** Only a `coordinator:` assignee with no live
+  registration is adoptable; a human's or another tool's claim never is. A
+  claim left by a coordinator from before this section (an assignee without
+  the prefix) qualifies only when the bead's heartbeat block names that same
+  assignee as `owner=`: only coordinators write that block. An
+  `in_progress` bead also needs a bead heartbeat past the stall threshold;
+  `open` and `blocked` beads qualify on the registration test alone.
+  `rank_ready_work.py` lists the candidates it can see: `unowned_claims`
+  (`in_progress`, still spending a lane) and `stranded` (ready but assigned).
+  The `--if-assignee` / `--if-status` guards make
+  adoption a compare-and-swap, so two coordinators adopting at once cannot
+  both win; exit code 13 means the precondition no longer held (a peer got
+  there first), so skip the bead:
+
+  ```bash
+  # in_progress, abandoned: release it to the queue (cleanup's release-claim-candidate)
+  bd --actor "$COORDINATOR_ID" update <id> --if-assignee '<old>' \
+    --if-status in_progress --assignee '' --status open --json
+  # open, stranded by a dead assignee: clear the assignee so it re-enters the queue
+  bd --actor "$COORDINATOR_ID" update <id> --if-assignee '<old>' \
+    --if-status open --assignee '' --json
+  # blocked (on a PR, or a pr-review-task bead): take ownership in place, status unchanged
+  bd --actor "$COORDINATOR_ID" update <id> --if-assignee '<old>' \
+    --if-status blocked --assignee "$COORDINATOR_ID" --json
+  ```
+
+  Adopt a PR's original bead first and its review bead after; if the original
+  exits 13, leave the review bead to whoever won. A review bead stays
+  `blocked`; never release it to `open`.
+- **Rollout.** Coordinators started before this section existed neither
+  register nor pass `--actor`. Restart every running coordinator onto this
+  revision at a bead boundary; a mixed fleet can adopt a live old
+  coordinator's blocked beads.
 
 ## Orchestrator Wake Cadence (Prompt-Cache Economics)
 
@@ -101,7 +203,7 @@ Runtime binding (use whichever wake primitive the session exposes):
 
 ### No-progress frontier
 
-Once a poll finds genuinely nothing to do — `bd ready` empty, no dispatchable
+Once a poll finds genuinely nothing to do — queue empty, no dispatchable
 `pr-review-task`, no active workers, no near-term PR cooldown, no decision-sweep
 work — the cache-preserving fallback cadence stops paying for itself: there is no
 real work to keep warm a cache *for*. At that frontier, switch modes instead of
@@ -381,7 +483,8 @@ Rules:
 5. Use `bd dolt commit/push/pull` for Dolt version control, not manual file
    surgery. Use `bd vc status` to check for uncommitted changes.
 6. The assignee-check-then-renew-then-mutate rule from "Claiming And The Stall
-   Heartbeat" applies to every mutation here.
+   Heartbeat" applies to every mutation here, and every command carries
+   `--actor "$COORDINATOR_ID"` ("Parallel Coordinators").
 
 ## Bead Closure Rule
 

@@ -34,18 +34,21 @@ Default to the second shape:
   Continue the lane's session for the next bead (Claude Code: `SendMessage` to
   the worker's agent id/name; Codex: send input to the same thread) instead of
   spawning a fresh worker.
-- **Default one lane.** Run a second lane (the ceiling is 4; the owner raised it from 3) only when a
-  ready chain has none of the cohesion signals in
-  `../../th-projects/references/work-allocation.md` with the active lane, **and**
-  either the owner asked for throughput or the active lane is idle, waiting on
-  CI or review. Parallelism is how you buy wall-clock time. It is never the
-  default way to cut cost.
-- **Order for context locality.** Within a lane, run next the bead that shares
-  the most context with the one just finished (same module, spec area, fixtures,
-  review surface), even over a slightly higher-priority bead in another area.
-  Priority still decides the order *between* lanes and when a new lane opens.
-  Never let locality starve a P0/P1: an urgent bead in a different area gets a
-  new lane (or preempts the current one) immediately.
+- **Default one lane.** Run a second lane only when a ready chain has none of
+  the cohesion signals in `../../th-projects/references/work-allocation.md`
+  with the active lane (a second lane on the same epic still needs that
+  check), **and** either the owner asked for throughput or the active lane is
+  idle, waiting on CI or review. The ceiling is one budget
+  shared by every coordinator on the tracker (the `beads.max_lanes` kv key,
+  else 4). Parallelism is how you buy wall-clock time. It is never the default
+  way to cut cost.
+- **Order for context locality.** Within a lane, run next the top ready bead
+  of the epic the lane just worked: same epic usually means same module, spec
+  area, fixtures, and review surface, and it finishes the epic sooner. The
+  finish-first queue decides everything else, including which epic a new or
+  emptied lane takes. Locality yields to a P0, a pinned epic, or work two or
+  more priority levels more urgent: those take the lane at the next bead
+  boundary or open their own.
 - **Ride autocompaction; don't flee it.** Long lanes are expected to compact.
   Compaction keeps the stable prefix (system prompt, tools) warm and replaces
   history with a summary, which is far cheaper than a cold start. The safety net

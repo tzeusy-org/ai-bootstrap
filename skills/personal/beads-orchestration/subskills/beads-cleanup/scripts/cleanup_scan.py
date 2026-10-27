@@ -24,6 +24,7 @@ CANONICAL_COORDINATOR_SCRIPTS = (
 if str(CANONICAL_COORDINATOR_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(CANONICAL_COORDINATOR_SCRIPTS))
 
+from coordinator_registry import live_coordinator_ids  # noqa: E402
 from review_relation_graph import normalized_finding_relation_error  # noqa: E402
 
 
@@ -815,6 +816,7 @@ def scan_claims(
     worktree_names: set[str],
     branch_path_ids: dict[str, str],
     ambiguous_worktree_ids: set[str],
+    live_owners: set[str],
     now: datetime,
     errors: list[dict[str, str]],
 ) -> list[dict[str, Any]]:
@@ -826,6 +828,7 @@ def scan_claims(
         if issue_id is None:
             report_error(errors, "invalid-record", "claims")
             continue
+        owner_live = record.get("assignee") in live_owners
         worktree, ambiguous = resolve_claim_worktree(
             issue_id,
             repo_root,
@@ -843,7 +846,7 @@ def scan_claims(
         if unpublished_error:
             report_error(errors, unpublished_error, "claims")
         beat = heartbeat_state(record, now)
-        if beat == "fresh":
+        if beat == "fresh" or owner_live:
             recommendation = "preserve-live-claim"
         elif branch_error or unpublished_error:
             recommendation = "manual-triage"
@@ -857,6 +860,7 @@ def scan_claims(
             {
                 "heartbeat_state": beat,
                 "id": issue_id,
+                "owner_live": owner_live,
                 "recommendation": recommendation,
                 "remote_branch_exists": branch,
                 "unpublished_work": unpublished,
@@ -928,6 +932,7 @@ def scan_review_locks(
     *,
     repo_root: Path,
     worktree_names: set[str],
+    live_owners: set[str],
     now: datetime,
     errors: list[dict[str, str]],
 ) -> list[dict[str, Any]]:
@@ -947,7 +952,8 @@ def scan_review_locks(
             report_error(errors, "invalid-bead-status", "review-locks")
             recommendation = "manual-triage"
         else:
-            live = status == "in_progress" and exists and beat == "fresh"
+            owner_live = record.get("assignee") in live_owners
+            live = status == "in_progress" and exists and (beat == "fresh" or owner_live)
             recommendation = "preserve-review-lock" if live else "release-review-lock-candidate"
         findings.append(
             {
@@ -1134,6 +1140,13 @@ def scan(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         report_error(errors, "normalizer-failed", "pr-review")
 
     claims_records, claims_error = list_records(repo_root, status="in_progress")
+    registry_payload, registry_error = command_json(["bd", "-C", str(repo_root), "kv", "list", "--json"], repo_root)
+    if registry_error is None and not isinstance(registry_payload, dict):
+        registry_error = "invalid-json"
+    if registry_error:
+        # Without the registry, liveness falls back to bead heartbeats alone.
+        report_error(errors, registry_error, "registry")
+    live_owners = live_coordinator_ids(registry_payload, now) if isinstance(registry_payload, dict) else set()
     blocked_records, blockers_error = list_records(repo_root, status="blocked")
     lock_records, locks_error = list_records(repo_root, label="review-running")
     for error, scope in ((claims_error, "claims"), (blockers_error, "blockers"), (locks_error, "review-locks")):
@@ -1170,6 +1183,7 @@ def scan(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         worktree_names=worktree_names,
         branch_path_ids=branch_path_ids,
         ambiguous_worktree_ids=ambiguous_worktree_ids,
+        live_owners=live_owners,
         now=now,
         errors=errors,
     )
@@ -1178,6 +1192,7 @@ def scan(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         lock_records,
         repo_root=repo_root,
         worktree_names=worktree_names,
+        live_owners=live_owners,
         now=now,
         errors=errors,
     )

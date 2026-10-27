@@ -1,7 +1,9 @@
 # Epic Coordination
 
-Load this file only when the selected bead is an epic or when a worker reports
-a hard blocker that needs new bead creation.
+Load this file when `coordinator-loop.md` Step 2 decomposes a childless epic,
+when a `focus` epic qualifies for Team Lead mode (Step 5), or when a worker
+reports a hard blocker that needs new bead creation. The finish-first queue
+never lists an epic itself; it lists the epic's runnable children.
 
 ## Epic Decomposition
 
@@ -45,17 +47,30 @@ Claude); see "Reconciliation Floor" in `runtime-and-safety.md`.
    ```bash
    bd children <epic-id> --json
    ```
-2. If children exist, dispatch each ready child as a separate worker.
-3. If no children exist, the coordinator must create the child beads
-   sequentially before dispatch:
+2. If children exist, they enter the finish-first queue
+   (`../scripts/rank_ready_work.py`) and each ready child dispatches as its own
+   bead, at most `--max-lanes-per-epic` at a time.
+3. If no children exist, the epic shows under `childless_epics`. Decompose it
+   only when `coordinator-loop.md` Step 2 selects it. One owner does it: you,
+   following `../../beads-writer/SKILL.md`'s workflow, holding the epic's
+   claim while creating the children sequentially (child ids come from a
+   per-parent counter that two creators can race):
    ```bash
-   CHILD_JSON=$(bd create "<subtask title>" \
+   bd --actor "$COORDINATOR_ID" update <epic-id> --claim --json
+   CHILD_JSON=$(bd --actor "$COORDINATOR_ID" create "<subtask title>" \
      --description="<details>" \
-     -t task -p <priority> \
+     -t task -p <priority> --parent <epic-id> \
      --json)
    CHILD_ID=$(echo "${CHILD_JSON}" | jq -r '.id // .[0].id')
-   bd dep add <epic-id> "${CHILD_ID}"
+   # repeat per child; wire sibling order with dep add, then:
+   bd --actor "$COORDINATOR_ID" unclaim <epic-id> --reason "decomposed"
    ```
+   `--parent` is what makes a bead count toward its epic's progress in the
+   ranking; a plain dependency from the epic on the child only blocks the epic
+   and leaves the child an orphan in the queue. Children inherit the epic's labels: add
+   `--no-inherit-labels` when the epic carries lifecycle labels such as
+   `team-coordination` or `needs-shaping` (the ranking reads a `focus` pin
+   from ancestors either way).
 4. Then dispatch the subtasks through the normal loop. Each child must pass
    the dispatch-readiness gate in `coordinator-loop.md`: a title-and-description
    stub like the one above is stamped `needs-shaping`, and the shaping lane
@@ -71,13 +86,23 @@ does not own Beads lifecycle mutations.
 
 ### Slot Reservation
 
-A Team Lead reserves all available worker slots for the duration of its
-execution unless `team_size` is explicitly constrained.
+A Team Lead holds one lane (the epic's claim) plus `TEAM_SIZE` subworker
+lanes of the global budget. Set `TEAM_SIZE` to at most `capacity.free - 1`,
+read before claiming the epic, so other epics keep their lanes. Subworkers are
+invisible to the tracker, so publish them for every coordinator until the lead
+reports, and drop back to 0 after:
 
-While a Team Lead is active:
-- no new independent workers are dispatched
-- the coordinator continues looping, but only for PR-review handling and
-  monitoring
+```bash
+uv run scripts/coordinator_registry.py register --repo-root "$REPO_ROOT" \
+  --id "$COORDINATOR_ID" --wake-minutes <planned delay> --extra-lanes <TEAM_SIZE>
+```
+
+`rank_ready_work.py` counts them as occupied, and while the epic is
+`in_progress` with the `team-coordination` label it keeps the epic's children
+out of every coordinator's queue.
+
+While a Team Lead is active, the coordinator keeps looping for PR-review
+handling, monitoring, and whatever budget remains.
 
 ### Team Lead Rules
 
@@ -94,9 +119,9 @@ While a Team Lead is active:
 
 1. Label the epic:
    ```bash
-   bd update <epic-id> --add-label team-coordination
+   bd --actor "$COORDINATOR_ID" update <epic-id> --add-label team-coordination
    ```
-2. Claim it atomically with `bd update <epic-id> --claim` and write the stall heartbeat.
+2. Claim it atomically with `bd --actor "$COORDINATOR_ID" update <epic-id> --claim` and write the stall heartbeat.
 3. Create Team Lead worktree:
    ```bash
    (cd "${REPO_ROOT}" && bd worktree create .worktrees/parallel-agents/<epic-id> --branch agent/<epic-id>)
@@ -148,7 +173,9 @@ Use the same monitoring process as normal workers, with these additions:
 - Team Leads get 3x the normal stall timeout before intervention.
 - If a Team Lead stalls but has pushed sub-branches:
   1. check which slices are complete versus still open
-  2. release the epic back to `open` with a note listing completed work
+  2. release the epic with
+     `bd --actor "$COORDINATOR_ID" unclaim <epic-id> --reason "<completed slices>"`
+     and re-register with `--extra-lanes 0`
   3. on the next cycle, re-evaluate whether a fresh Team Lead should finish
      integration only
 - When the Team Lead finishes, apply the same closure rule as regular workers.
@@ -165,12 +192,18 @@ If a worker or Team Lead reports a hard blocker:
    blockers and hard-gated decisions proceed to step 1.
 1. The coordinator creates a blocker issue:
    ```bash
-   BLOCKER_JSON=$(bd create "Blocker: <description>" \
+   BLOCKER_JSON=$(bd --actor "$COORDINATOR_ID" create "Blocker: <description>" \
      --description="<details>" \
-     -t bug -p 0 \
+     -t bug -p <priority of the blocked bead> \
      --json)
    BLOCKER_ID=$(echo "${BLOCKER_JSON}" | jq -r '.id // .[0].id')
-   bd dep add <original-id> "${BLOCKER_ID}"
+   bd --actor "$COORDINATOR_ID" dep add <original-id> "${BLOCKER_ID}"
    ```
-2. The coordinator releases the original issue back to `open` or `blocked` as
-   appropriate.
+   The blocker takes the blocked bead's priority, not P0: the ranking's
+   prerequisite rule already queues it with the blocked bead's epic, and P0
+   is reserved for incidents that preempt everything.
+2. The coordinator releases the original with
+   `bd --actor "$COORDINATOR_ID" unclaim <original-id>`: its new dependency
+   keeps it out of the ready queue until the blocker closes, and then any
+   coordinator can take it. Keep it `blocked` under your claim instead only
+   when `coordinator-loop.md` Step 7 ties its recovery state to your lane.

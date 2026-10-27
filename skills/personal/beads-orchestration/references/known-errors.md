@@ -2304,10 +2304,8 @@ base branch.
 
 ## `bd update --claim` refuses a stale claim held by a *different* actor
 
-`runtime-and-safety.md`'s ownership rule says an expired-heartbeat claim held by
-another actor may be reclaimed with `bd update <id> --claim`. In practice (bd
-1.0.4) `--claim` hard-refuses whenever `assignee` is already non-empty and not
-you, regardless of heartbeat staleness:
+`--claim` hard-refuses whenever `assignee` is already non-empty and not you,
+regardless of heartbeat staleness (bd 1.0.4; unchanged in 1.3.1):
 
 ```
 Error claiming <id>: issue already claimed by coordinator:<other-uuid>
@@ -2315,21 +2313,22 @@ Error claiming <id>: issue already claimed by coordinator:<other-uuid>
 
 This is a different failure from the documented "claiming a blocked bead" and
 "claiming an already-in_progress bead with an empty assignee" cases above —
-here `assignee` is populated, just stale. Confirm the heartbeat is actually
-past the stall threshold first (never do this to a live actor), then clear the
-assignee before reclaiming:
+here `assignee` is populated, just stale. Fix (bd 1.3+): confirm the holder is
+dead (no live registration and a stale heartbeat), then release with the
+guarded update in `../subskills/beads-coordinator/references/runtime-and-safety.md`
+→ "Parallel Coordinators" → "Adopt the dead, guarded" and claim afresh. The
+unguarded `bd update <id> --status open --assignee ""` used on bd 1.0.4 (no
+`--if-assignee`) races when two coordinators recover at once.
 
-```bash
-bd update <id> --status open --assignee "" --json   # drop the stale assignee
-bd update <id> --claim --json                        # now succeeds
-```
-
-Note `--claim` sets `assignee` to your resolved identity (e.g. the git user
-`Tzeusy`), not a synthetic `coordinator:<uuid>` string — only the heartbeat
-note uses that convention. Re-verify `assignee` in the result as usual.
+`--claim` sets `assignee` to the resolved actor: `--actor`, else
+`$BEADS_ACTOR`, else the git user (e.g. `Tzeusy`). That fallback is why every
+coordinator command now carries `--actor "$COORDINATOR_ID"`: two coordinators
+under one git user otherwise share an assignee and each reads the other's
+claims as its own. Re-verify `assignee` in the result as usual.
 Observed 2026-09-08, bd 1.0.4, reclaiming two `in_progress` spec-correction
 beads (`bu-atsax`, `bu-m09qm`) whose prior coordinator session's heartbeat was
-~24h stale.
+~24h stale. Actor fallback and guarded release re-checked 2026-10-27, bd 1.3.1
+(`bd update --help`).
 
 ## Transient "Verify the external server is running and reachable" on bd mutations
 

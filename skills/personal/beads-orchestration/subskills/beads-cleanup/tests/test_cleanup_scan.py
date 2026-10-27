@@ -80,6 +80,11 @@ def install_fakes(fake_bin: FakeBinDir) -> None:
             print(json.dumps(fixture.get("dependencies", {}).get(issue_id, [])))
             raise SystemExit(0)
 
+        if argv[:2] == ["kv", "list"]:
+            fail("bd-kv-list")
+            print(json.dumps(fixture.get("kv", {})))
+            raise SystemExit(0)
+
         if argv[:2] == ["worktree", "list"]:
             fail("bd-worktree-list")
             print(json.dumps(fixture.get("worktree_entries", [])))
@@ -294,7 +299,9 @@ class CleanupScanTests(unittest.TestCase):
                 import json
                 import sys
 
-                if "list" in sys.argv:
+                if "kv" in sys.argv:
+                    print(json.dumps({}))
+                elif "list" in sys.argv:
                     print(json.dumps([]))
                 elif "config" in sys.argv:
                     print(json.dumps({"key": "issue_prefix", "value": "aib"}))
@@ -491,6 +498,89 @@ class CleanupScanTests(unittest.TestCase):
         self.assertEqual(claim["recommendation"], "release-claim-candidate")
         self.assertEqual(payload["errors"], [])
         self.assertEqual(payload["status"], "success")
+
+    def test_stale_heartbeat_under_a_live_registered_coordinator_is_preserved(self) -> None:
+        # A peer coordinator sleeping between cache-bounded wakes lets bead
+        # heartbeats lapse; its registry entry, not the bead note, proves it live.
+        fixture = {
+            "in_progress": [
+                bead("aib-peer", "in_progress", assignee="coordinator:peer", notes=heartbeat("2026-08-14T03:00:00Z")),
+                bead("aib-dead", "in_progress", assignee="coordinator:dead", notes=heartbeat("2026-08-14T03:00:00Z")),
+            ],
+            "kv": {
+                "beads.coordinator.coordinator:peer": json.dumps({"expires_at": "2026-08-14T04:30:00Z"}),
+                "beads.coordinator.coordinator:dead": json.dumps({"expires_at": "2026-08-14T03:30:00Z"}),
+            },
+            "blocked": [],
+            "review_running": [],
+            "worktree_entries": [
+                worktree_entry(path_id="aib-peer", branch_id="aib-peer"),
+                worktree_entry(path_id="aib-dead", branch_id="aib-dead"),
+            ],
+            "worktree_dirs": ["aib-peer", "aib-dead"],
+            "remote_branches": ["aib-peer", "aib-dead"],
+            "unpublished_worktrees": [],
+            "shows": {"aib-peer": [bead("aib-peer", "in_progress")], "aib-dead": [bead("aib-dead", "in_progress")]},
+            "blocked_pr_review": [],
+            "blocked_pr_review_tasks": [],
+            "open_prs": [],
+        }
+
+        result, _, _ = self.run_fixture(fixture)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        claims = {item["id"]: item for item in json.loads(result.stdout)["claims"]}
+        self.assertEqual(claims["aib-peer"]["recommendation"], "preserve-live-claim")
+        self.assertTrue(claims["aib-peer"]["owner_live"])
+        self.assertEqual(claims["aib-dead"]["recommendation"], "release-claim-candidate")
+        self.assertFalse(claims["aib-dead"]["owner_live"])
+
+    def test_unreadable_registry_falls_back_to_heartbeats_and_reports_partial(self) -> None:
+        fixture = {
+            "in_progress": [bead("aib-peer", "in_progress", assignee="coordinator:peer", notes=heartbeat("2026-08-14T03:00:00Z"))],
+            "failures": {"bd-kv-list": "boom"},
+            "blocked": [],
+            "review_running": [],
+            "worktree_entries": [worktree_entry(path_id="aib-peer", branch_id="aib-peer")],
+            "worktree_dirs": ["aib-peer"],
+            "remote_branches": ["aib-peer"],
+            "unpublished_worktrees": [],
+            "shows": {"aib-peer": [bead("aib-peer", "in_progress")]},
+            "blocked_pr_review": [],
+            "blocked_pr_review_tasks": [],
+            "open_prs": [],
+        }
+
+        result, _, _ = self.run_fixture(fixture)
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "partial")
+        self.assertIn({"code": "command-failed", "scope": "registry"}, payload["errors"])
+        self.assertEqual(payload["claims"][0]["recommendation"], "release-claim-candidate")
+
+    def test_review_lock_of_a_live_registered_coordinator_is_preserved(self) -> None:
+        fixture = {
+            "in_progress": [],
+            "kv": {"beads.coordinator.coordinator:peer": "2026-08-14T04:30:00Z"},
+            "blocked": [],
+            "review_running": [
+                bead("aib-rev", "in_progress", assignee="coordinator:peer", notes=heartbeat("2026-08-14T03:00:00Z")),
+            ],
+            "worktree_entries": [worktree_entry(path_id="aib-rev", branch_id="aib-rev")],
+            "worktree_dirs": ["aib-rev"],
+            "remote_branches": [],
+            "unpublished_worktrees": [],
+            "shows": {"aib-rev": [bead("aib-rev", "in_progress")]},
+            "blocked_pr_review": [],
+            "blocked_pr_review_tasks": [],
+            "open_prs": [],
+        }
+
+        result, _, _ = self.run_fixture(fixture)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lock = json.loads(result.stdout)["review_locks"][0]
+        self.assertEqual(lock["recommendation"], "preserve-review-lock")
 
     def test_claims_missing_worktree_directory_remains_manual_triage(self) -> None:
         # "aib-missing" is registered as a bare branch reference (no
@@ -1743,6 +1833,7 @@ class CleanupScanTests(unittest.TestCase):
             {"tool": "bd", "argv": ["-C", repo_root, "config", "get", "issue_prefix", "--json"]},
             {"tool": "gh", "argv": ["pr", "list", "--state", "open", "--json", "number,headRefName,createdAt"]},
             {"tool": "bd", "argv": ["-C", repo_root, "list", "--status=in_progress", "--json", "--limit", "0"]},
+            {"tool": "bd", "argv": ["-C", repo_root, "kv", "list", "--json"]},
             {"tool": "bd", "argv": ["-C", repo_root, "list", "--status=blocked", "--json", "--limit", "0"]},
             {"tool": "bd", "argv": ["-C", repo_root, "list", "--label", "review-running", "--json", "--limit", "0"]},
             {"tool": "bd", "argv": ["-C", repo_root, "worktree", "list", "--json"]},

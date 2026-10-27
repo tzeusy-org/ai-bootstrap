@@ -1,15 +1,16 @@
 ---
 name: beads-orchestration
-description: Use for any Beads (`bd`) issue workflow in a Beads-backed repository — coordinating unattended execution of ready issues through long-lived worker lanes, implementing a single dispatched issue in a worktree, handling PR-review follow-up tasks, reconciling stale worker/PR/worktree state, or creating and decomposing backlog issues. Route to exactly one subskill per task.
+description: Use for any Beads (`bd`) issue workflow in a Beads-backed repository — coordinating unattended execution of ready issues through long-lived worker lanes (finishing started epics first, alone or with several coordinators on one backlog), implementing a single dispatched issue in a worktree, handling PR-review follow-up tasks, reconciling stale worker/PR/worktree state, or creating and decomposing backlog issues. Route to exactly one subskill per task.
 metadata:
   owner: tze
   authors:
     - tze
     - OpenAI Codex
     - Claude Fable 5.1
+    - Claude Opus 5.5
   status: active
-  last_reviewed: "2026-10-22"
-compatibility: Requires bd (beads) CLI v1.0.4+, git, and a Beads-backed repository. Execution subskills additionally require gh (authenticated), jq, python3, and git worktree support.
+  last_reviewed: "2026-10-27"
+compatibility: Requires bd (beads) CLI v1.3+, git, and a Beads-backed repository. Execution subskills additionally require gh (authenticated), jq, python3, uv, and git worktree support.
 ---
 
 # Beads Orchestration
@@ -38,7 +39,7 @@ resolves against the wrong tree.
 
 | Task intent | Subskill | Typical trigger |
 |---|---|---|
-| Run the unattended loop: select ready issues, claim, dispatch workers, reconcile outcomes. Owns ALL `bd` lifecycle mutations. | [subskills/beads-coordinator/SKILL.md](subskills/beads-coordinator/SKILL.md) | "while true, tackle the next issue", "keep N workers processing the backlog" |
+| Run the unattended loop: rank ready issues finish-first, claim, dispatch workers, reconcile outcomes; one or several coordinators per tracker. Owns ALL `bd` lifecycle mutations. | [subskills/beads-coordinator/SKILL.md](subskills/beads-coordinator/SKILL.md) | "while true, tackle the next issue", "keep N workers processing the backlog", "run a second coordinator on the same backlog" |
 | Implement exactly one Beads issue; requires ISSUE_ID and WORKTREE_PATH from a coordinator or operator. | [subskills/beads-worker/SKILL.md](subskills/beads-worker/SKILL.md) | Dispatched with a worker contract for one implementation bead |
 | Process one `pr-review-task` bead: triage threads, report corrections to the implementation lane, attest exact-head merge readiness. | [subskills/beads-pr-reviewer-worker/SKILL.md](subskills/beads-pr-reviewer-worker/SKILL.md) | Dispatched with a `pr-review-task` bead for an open GitHub PR |
 | Reconcile stale worker state, PR-review bookkeeping, and orphaned worktrees before dispatching new work. | [subskills/beads-cleanup/SKILL.md](subskills/beads-cleanup/SKILL.md) | Coordinator preflight; recovery after a crashed loop; "clean up stale beads state" |
@@ -63,7 +64,8 @@ resolves against the wrong tree.
 
 - During an execution run, the coordinator is the **sole mutation authority**
   for canonical lifecycle state (`bd create/update/dep/close`); dispatched
-  workers and cleanup report instead of mutating. The standalone beads-writer
+  workers and cleanup report instead of mutating. With several coordinators,
+  each mutates only the beads it holds, under its own `--actor` id. The standalone beads-writer
   may create/update/depend backlog items during explicit authoring before
   dispatch, but hands mutation authority to the coordinator once execution
   starts.
@@ -77,14 +79,19 @@ resolves against the wrong tree.
   worktree. Full disk is not an operator blocker while targets of merged or
   closed beads remain. A repo may tighten this, but "keep everything" without
   a retention rule is not a policy.
-- bd 1.0.4 has no `--rig` flag: target another project with `bd -C <path> …`.
+- bd has no `--rig` flag: target another project with `bd -C <path> …`.
 - **Spirit > spec > DAG.** Beads are the implementation DAG derived from the
   project's specs, which serve its doctrine (`th-projects`). The writer derives
-  beads from approved specs, the coordinator executes the DAG in priority
+  beads from approved specs, the coordinator executes the DAG in finish-first
   order, and a worker implements one node. None of them re-plans: a bead that
   conflicts with its spec or doctrine, or has no governing spec, is routed back
   through `th-projects` (feature-request amendment or direction), not
   reinterpreted, re-scoped, or quietly dispatched.
+- **Finish outcomes before starting new ones.** The coordinator ranks ready
+  work so a pool of lanes completes a few epics instead of half-building many
+  (`subskills/beads-coordinator/scripts/rank_ready_work.py`). Reports count
+  merged outcomes and name partial ones; bead, PR, and commit counts are
+  activity, not delivery.
 - **Decide, don't defer.** Engineering-judgment choices are resolved
   autonomously per [`references/decision-autonomy.md`](references/decision-autonomy.md);
   blocking on a human is reserved for its hard-gate list. Load that file before
