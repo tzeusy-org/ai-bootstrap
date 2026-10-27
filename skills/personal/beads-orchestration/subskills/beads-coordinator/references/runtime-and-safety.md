@@ -142,21 +142,22 @@ then update this reference and its contract test in the same change.
 | `HIGH_COMPLEXITY_MODEL` | Opus 5.5 Medium | GPT-6.1 Sol High | gemini-4-argon |
 | `MEDIUM_COMPLEXITY_MODEL` | Sonnet 5.5 High | GPT-6.1 Sol High | gemini-4-argon |
 | `LOW_COMPLEXITY_MODEL` | Sonnet 5.5 Low | GPT-6.1 Sol Low | gemini-3.8-flash |
-| `TRIVIAL_COMPLEXITY_MODEL` | Haiku 5.5 Low | GPT-6 Luna Max | gemini-3.8-flash |
+| `TRIVIAL_COMPLEXITY_MODEL` | Haiku 5.5 Low | GPT-6.1 Terra Low | gemini-3.8-flash |
 | `DESIGN_AND_SPECIFICATION_MODEL` | Opus 5.5 High | GPT-6.1 Sol XHigh | gemini-4-argon |
 
 These are deliberate local choices over the vendors' starting-point guidance.
-On Codex, Sol 6.1 is the workhorse and Luna is reserved for trivial work.
-Dispatch trivial work (see the TRIVIAL criteria below) with Luna Max; never
-dispatch Luna for anything that needs judgment. Dispatch non-trivial work below
-medium with Sol Low, medium and high work with Sol High, and epic work and
-plan/scoping/design/specification drafting with Sol XHigh. Sol is the only
-non-trivial Codex model: do not dispatch Astra or Terra. Escalation on Codex is
-an effort step within Sol (Low -> High -> XHigh), never a model-family switch.
+On Codex, Sol 6.1 is the workhorse and Terra 6.1 is reserved for trivial
+work. Dispatch trivial work (see the TRIVIAL criteria below) with Terra Low;
+never dispatch Terra for anything that needs judgment. Dispatch non-trivial
+work below medium with Sol Low, medium and high work with Sol High, and epic
+work and plan/scoping/design/specification drafting with Sol XHigh. Sol is the
+only non-trivial Codex model: do not dispatch Astra, Luna, or GPT-5.6-generation
+models. Escalation on Codex is an effort step within Sol (Low -> High ->
+XHigh), never a model-family switch.
 
 Anthropic recommends starting Opus 5.5 at its default `medium` effort and
 tuning against task-specific evals. This policy mirrors the Codex split: Haiku
-5.5 (priced like Luna) for trivial work only, Sonnet 5.5 (priced like Sol) for
+5.5 for trivial work only, Sonnet 5.5 (priced like Sol) for
 low (`low` effort) and medium (`high` effort) work, and Opus 5.5 above them:
 `medium` for high work, `high` for epic or plan/specification drafting.
 Escalate after a shallow or failed attempt: low to medium tier first, then to
@@ -197,7 +198,7 @@ subagent mechanism:
 
 | Policy choice | `model` | `reasoning_effort` |
 |---|---|---|
-| GPT-6 Luna Max | `gpt-6-luna` | `max` |
+| GPT-6.1 Terra Low | `gpt-6.1-terra` | `low` |
 | GPT-6.1 Sol Low | `gpt-6.1-sol` | `low` |
 | GPT-6.1 Sol High | `gpt-6.1-sol` | `high` |
 | GPT-6.1 Sol XHigh | `gpt-6.1-sol` | `xhigh` |
@@ -243,7 +244,7 @@ most backlog beads are not the hard case. Default to the lowest tier the
 criteria allow and escalate on evidence (a failed or shallow attempt), not on
 vibes: one redispatch after a too-weak attempt costs less than habitually
 over-provisioning every bead. Effort is part of each approved pairing, not a
-second opportunity to cheapen it: in particular, Luna `max` is the only Codex
+second opportunity to cheapen it: in particular, Terra `low` is the only Codex
 setting for TRIVIAL work. Right-size when a lane is **formed**, from the highest
 tier in its planned chain. Never switch a live lane's model: that is a cold
 start, so retire the lane instead.

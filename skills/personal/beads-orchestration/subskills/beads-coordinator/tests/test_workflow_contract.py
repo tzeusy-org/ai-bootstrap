@@ -56,12 +56,12 @@ class BeadsCoordinatorWorkflowContractTests(unittest.TestCase):
             "| `HIGH_COMPLEXITY_MODEL` | Opus 5.5 Medium | GPT-6.1 Sol High | gemini-4-argon |",
             "| `MEDIUM_COMPLEXITY_MODEL` | Sonnet 5.5 High | GPT-6.1 Sol High | gemini-4-argon |",
             "| `LOW_COMPLEXITY_MODEL` | Sonnet 5.5 Low | GPT-6.1 Sol Low | gemini-3.8-flash |",
-            "| `TRIVIAL_COMPLEXITY_MODEL` | Haiku 5.5 Low | GPT-6 Luna Max | gemini-3.8-flash |",
+            "| `TRIVIAL_COMPLEXITY_MODEL` | Haiku 5.5 Low | GPT-6.1 Terra Low | gemini-3.8-flash |",
             "| `DESIGN_AND_SPECIFICATION_MODEL` | Opus 5.5 High | GPT-6.1 Sol XHigh | gemini-4-argon |",
         ):
             self.assertIn(row, contents)
         for binding in (
-            "| GPT-6 Luna Max | `gpt-6-luna` | `max` |",
+            "| GPT-6.1 Terra Low | `gpt-6.1-terra` | `low` |",
             "| GPT-6.1 Sol Low | `gpt-6.1-sol` | `low` |",
             "| GPT-6.1 Sol High | `gpt-6.1-sol` | `high` |",
             "| GPT-6.1 Sol XHigh | `gpt-6.1-sol` | `xhigh` |",
@@ -74,8 +74,8 @@ class BeadsCoordinatorWorkflowContractTests(unittest.TestCase):
             self.assertIn(binding, contents)
         self.assertIn("Plan/design/specification override", contents)
         self.assertIn("before the complexity-label fast path", contents)
-        self.assertIn("never\ndispatch Luna for anything that needs judgment", contents)
-        self.assertIn("do not dispatch Astra or Terra", contents)
+        self.assertIn("never dispatch Terra for anything that needs judgment", contents)
+        self.assertIn("do not dispatch Astra, Luna, or GPT-5.6-generation", contents)
         self.assertIn("Never dispatch Haiku for anything that needs judgment", contents)
         for path in (WRITER, TOKEN_EFFICIENCY):
             self.assertIn("design/specification override", path.read_text(encoding="utf-8"))
