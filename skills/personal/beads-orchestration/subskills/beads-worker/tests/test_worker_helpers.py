@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -15,6 +16,9 @@ from pathlib import Path
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 ASSERT_CONTEXT = SKILL_ROOT / "scripts" / "assert_worker_context.py"
 EMIT_REPORT = SKILL_ROOT / "scripts" / "emit_worker_report.py"
+PACKAGE_PLACEHOLDER = "<loaded beads-worker package>"
+HELPER_PATH = re.compile(r"scripts/(?:assert_worker_context|emit_worker_report)\.py")
+BARE_HELPER_PATH = re.compile(r"(?<!" + re.escape(PACKAGE_PLACEHOLDER) + r"/)" + HELPER_PATH.pattern)
 
 
 class AssertWorkerContextTests(unittest.TestCase):
@@ -210,6 +214,41 @@ class AssertWorkerContextTests(unittest.TestCase):
         self.assertIn("repo-root-git-identity-unverifiable", missing_payload["reasons"])
         misbound_payload = json.loads(misbound_result.stdout)
         self.assertIn("process-cwd-does-not-match-current-path", misbound_payload["reasons"])
+
+    def test_documented_helper_commands_run_from_script_free_consumer(self) -> None:
+        # A dispatched worker's cwd is a consumer worktree that ships no
+        # scripts/ of its own, so every documented helper command must reach
+        # the loaded package rather than a repo-root path.
+        blocks = []
+        for doc in (SKILL_ROOT / "SKILL.md", *(SKILL_ROOT / "references").glob("*.md")):
+            for block in re.findall(r"```(?:bash|sh)?\n(.*?)```", doc.read_text(encoding="utf-8"), re.S):
+                if not HELPER_PATH.search(block):
+                    continue
+                self.assertNotRegex(block, BARE_HELPER_PATH, f"{doc.name} invokes a helper by a cwd-relative path")
+                if not block.rstrip().endswith("..."):  # elided usage stubs are not runnable
+                    blocks.append((doc.name, block.replace(PACKAGE_PLACEHOLDER, str(SKILL_ROOT))))
+        self.assertGreaterEqual({name for name, _ in blocks}, {"SKILL.md", "runtime-contract.md", "worker-report.md"})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp) / "consumer"
+            worktree = Path(tmp) / "worker"
+            self._init_repo(repo_root)
+            subprocess.run(
+                ["git", "-C", str(repo_root), "worktree", "add", "-q", "-b", "agent/bd-42", str(worktree)],
+                check=True,
+            )
+            self.assertFalse((worktree / "scripts").exists())
+            env = {**os.environ, "WORKTREE_PATH": str(worktree), "REPO_ROOT": str(repo_root), "ISSUE_ID": "bd-42"}
+            for name, block in blocks:
+                result = subprocess.run(
+                    ["bash", "-euo", "pipefail", "-c", block],
+                    cwd=worktree,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, f"{name}:\n{block}\n{result.stdout}{result.stderr}")
 
 
 class EmitWorkerReportTests(unittest.TestCase):
