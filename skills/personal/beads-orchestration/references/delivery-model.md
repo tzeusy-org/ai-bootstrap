@@ -62,7 +62,9 @@ corrections return to existing owners, genuine emergencies preserve preemption.
 Its bounded WIP escape admits a needed prerequisite or emergency when parked
 ownership would otherwise prevent progress; ordinary spillover gets no exemption.
 Same-head reviewed work awaiting CI/owner/merge queue is a wait, not another
-review. Spare capacity can advance a disjoint bounded outcome when runnable
+review. A package parked on an owner gate (gate label or `held` receipt) and a
+dead coordinator's claim release WIP while keeping their claims; technical waits
+keep it. Spare capacity can advance a disjoint bounded outcome when runnable
 higher-class actions are admitted and the WIP bound permits it. Real hard gates
 still block only the work that depends on them.
 
@@ -242,8 +244,10 @@ A malformed receipt or unknown head needs triage, not optimistic admission.
   work within execution and WIP capacity after higher-class actions drain. Record
   the resume event and give returning reviews/corrections priority at the next safe
   checkpoint; do not keep opening new outcomes to manufacture activity.
-- Owner hold: publish precise dependent scope, authority and unblock event. Continue
-  unaffected work; never infer consent from a prior answer or elapsed time.
+- Owner hold: publish precise dependent scope, authority and unblock event. The
+  outcome keeps its claims and worktree but releases WIP, so lanes continue
+  unaffected work while the human acts; never infer consent from a prior answer
+  or elapsed time.
 
 P0/emergency work preempts at a safe commit/checkpoint; publish recovery state,
 release or retain claims explicitly and identify who will resume. Outcome affinity

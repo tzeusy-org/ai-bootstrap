@@ -65,7 +65,8 @@ shared queue admits it with execution/WIP capacity and higher-class work drained
 keep the original resume event and checkpoint when its review/correction returns.
 
 Park the anchor as blocked when implementation hands off or waits; this releases
-execution capacity without releasing claims, worktree or session. Resume in_progress
+execution capacity without releasing claims, worktree or session. An owner-gate
+park (gate label or `held` receipt) also releases WIP; a technical wait keeps it. Resume in_progress
 only after queue admission. Independent review persists one typed review_receipt
 on its canonical review bead; same-head ready/held/queued verdicts are waits or
 fresh merge actions, not another source-review job. Corrections keep their existing

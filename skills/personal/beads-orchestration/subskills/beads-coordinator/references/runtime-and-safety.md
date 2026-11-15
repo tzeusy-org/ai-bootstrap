@@ -118,6 +118,16 @@ below stops one coordinator from duplicating or undoing another's work.
   Review records count execution while `in_progress`; finish the report and return
   them to `blocked` when waiting. Never mark work parked while its job still runs.
   Retained implementation packages count separately in `capacity.owned/free_wip`.
+  Owned WIP counts only outcomes agents are building. Two kinds of claim keep
+  their claims and worktree but leave `owned`, listed under
+  `capacity.owned_excluded`: a blocked anchor parked on an owner gate (a gate
+  label such as `needs-human`, `human-gate` or `owner-held`, the ranker's
+  `OWNER_GATE_LABELS`, or a same-head `held` canonical review receipt), and any
+  claim whose coordinator has no live registration. Lanes keep working on other
+  ready work while the human acts; dead claims are adoptable under the guarded
+  rule below, not held. Technical waits (CI, review, merge queue) and every
+  `in_progress` anchor still count, and a dead `in_progress` claim still
+  reserves execution until recovery.
   The same budget bounds new-outcome WIP; reviewers and corrections of an existing
   package need an execution slot, not a second implementation-WIP slot. This admits
   independent review even when every implementation owner is parked, including

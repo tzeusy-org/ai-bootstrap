@@ -56,7 +56,13 @@ retain claims and outcome WIP but park execution; member in-progress flags
 never override a parked anchor. A closed anchor conservatively falls back to
 its pending members. Live registrations' `extra_lanes` reserve execution.
 New outcomes also require free owned-WIP capacity under the same budget;
-reviews and corrections reuse existing WIP. Running higher-priority work
+reviews and corrections reuse existing WIP. Owned WIP counts coordinator
+claims agents are building: a blocked anchor parked on an owner gate (a label
+in `OWNER_GATE_LABELS`, or a same-head `held` canonical review receipt) and any
+claim whose coordinator has no live registration keep their claims but leave
+`owned`, listed under `capacity.owned_excluded` (`owner_gate`, `dead_owner`;
+additive to v2). Lanes keep working while the human acts; dead claims are
+adoptable, not held. Technical waits (CI, review, merge queue) still count. Running higher-priority work
 consumes slots without idling the rest; unadmitted peer-owned higher work
 requires owner resumption before unrelated admissions.
 One emergency or runnable prerequisite of retained parked work may overflow
@@ -288,6 +294,13 @@ def validate(snapshot: dict[str, Any]) -> dict[str, str] | None:
 
 
 HOLD_LABELS = frozenset({"no-dispatch", "needs-shaping", "scope:local-state", "owner-held", "human-gate", "held-for-owner"})
+# A blocked claim carrying one of these waits on an action only the human can
+# take, so it releases owned WIP while keeping its claims and worktree. `human`
+# is the label `bd human` lists; the rest are this package's and trackers' gates.
+OWNER_GATE_LABELS = frozenset({
+    "human", "needs-human", "human-gate", "owner-held", "held-for-owner", "owner-session",
+    "owner-signoff-pending", "physical-acceptance-pending", "live-acceptance-pending",
+})
 SHA_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 
 
@@ -300,8 +313,38 @@ def package_running(anchor, rows, delivery_anchors):
     return principal.get("status") == "in_progress"
 
 
-def execution_capacity(rows, delivery_anchors, regs, budget):
-    """Claims survive waits; only running anchors/reviewers consume execution."""
+def held_review_anchors(rows, review_state):
+    """Anchors whose canonical review receipt is `held` at the reviewed head.
+
+    Reads only the Step-0 findings already supplied; invalid or partial state
+    yields nothing, so it can never release WIP on its own.
+    """
+    findings = review_state.get("findings") if isinstance(review_state, dict) else None
+    held = set()
+    for finding in findings if isinstance(findings, list) else []:
+        if not (isinstance(finding, dict) and finding.get("kind") == "review-task"
+                and not finding.get("duplicate_of") and finding.get("pr_state") == "OPEN"
+                and finding.get("canonical_review_id") == finding.get("review_id")
+                and isinstance(finding.get("head_sha"), str)):
+            continue
+        try:
+            receipt = bead_metadata(rows.get(finding["review_id"], {})).get("review_receipt")
+        except (TypeError, ValueError):
+            continue
+        if (isinstance(receipt, dict) and receipt.get("disposition") == "held"
+                and receipt.get("head") == finding["head_sha"]):
+            held.add(finding.get("original_id"))
+    return held
+
+
+def execution_capacity(rows, delivery_anchors, regs, budget, held_anchors=frozenset()):
+    """Claims survive waits; only running anchors/reviewers consume execution.
+
+    Owned WIP bounds outcomes agents are building. A blocked owner-gated park
+    (gate label or held review receipt) and any claim of a dead coordinator are
+    not being built, so they keep their claims but leave `owned`; both are
+    reported under `owned_excluded`. Dead claims still reserve execution.
+    """
     groups = {}
     for row in rows.values():
         if row.get("status") == "closed" or not text(row.get("assignee")):
@@ -309,6 +352,7 @@ def execution_capacity(rows, delivery_anchors, regs, budget):
         anchor = delivery_anchors.get(row["id"], row["id"])
         groups.setdefault((text(row.get("assignee")), anchor), []).append(row)
     active, owned, other, unowned = {}, set(), 0, []
+    excluded = {"owner_gate": set(), "dead_owner": set()}
     for (owner, anchor), members in groups.items():
         principal = rows.get(anchor, members[0])
         review = "pr-review-task" in labels_of(principal)
@@ -317,7 +361,16 @@ def execution_capacity(rows, delivery_anchors, regs, budget):
             other += 1
             continue
         if not review and principal.get("issue_type") != "epic":
-            owned.add((owner, anchor))
+            dead = not regs.get(owner, {}).get("live")
+            gated = principal.get("status") == "blocked" and (
+                anchor in held_anchors
+                or any(labels_of(m) & OWNER_GATE_LABELS for m in members if m.get("status") != "closed"))
+            if dead:
+                excluded["dead_owner"].add(anchor)
+            if gated:
+                excluded["owner_gate"].add(anchor)
+            if not (dead or gated):
+                owned.add((owner, anchor))
         if running:
             active[owner] = active.get(owner, 0) + 1
         if not regs.get(owner, {}).get("live") and any(m.get("status") == "in_progress" for m in members):
@@ -328,7 +381,8 @@ def execution_capacity(rows, delivery_anchors, regs, budget):
     occupied = sum(active.values())
     return {"by_assignee": dict(sorted(active.items())), "occupied": occupied,
             "free": max(budget - occupied, 0), "owned": len(owned),
-            "free_wip": max(budget - len(owned), 0), "other_claims": other}, unowned
+            "free_wip": max(budget - len(owned), 0), "other_claims": other,
+            "owned_excluded": {key: sorted(ids)[:LIST_LIMIT] for key, ids in excluded.items()}}, unowned
 
 
 def admission_queue(candidates, rows, delivery_anchors, regs, capacity, review_state, *, coordinator, now, limit, ready_ids, budget):
@@ -731,7 +785,8 @@ def rank(
     # Owned work remains visible while blocked/open anchors lend their execution
     # slot to independent review. Never infer session retirement from parking.
     budget, budget_source = lane_budget(snapshot["kv"], lanes)
-    capacity, unowned = execution_capacity(rows, delivery_anchors, regs, budget)
+    capacity, unowned = execution_capacity(rows, delivery_anchors, regs, budget,
+                                           held_review_anchors(rows, review_state))
     by_assignee = capacity["by_assignee"]
     orphaned = []
     counted_epics = set()
