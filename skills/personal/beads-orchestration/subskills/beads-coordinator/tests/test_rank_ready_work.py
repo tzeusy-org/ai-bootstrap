@@ -261,7 +261,8 @@ class AdmissionPriorityTests(unittest.TestCase):
         intermediate["labels"] = []
         anchor["labels"] = ["owner-held"]
         held_owner = self.plan([anchor, intermediate, substrate], normalized(), lanes=1)
-        self.assertEqual(held_owner["queue"], [])
+        # An owner-gated anchor releases WIP, so this is ordinary admission.
+        self.assertEqual([(a["id"], a.get("wip_exception")) for a in held_owner["queue"]], [("bd-substrate", None)])
         anchor["labels"] = []
         intermediate.update(labels=[], assignee="coordinator:b")
         foreign = self.plan([anchor, intermediate, substrate], normalized(), lanes=1)
@@ -399,6 +400,11 @@ class AdmissionPriorityTests(unittest.TestCase):
                 expected = [prerequisite["id"]] if case in allowed else []
                 if case == "local-review-first":
                     expected.insert(0, review["id"])
+                if case == "own-held":
+                    # An owner-gated retained package frees its WIP slot: the
+                    # bead is ordinary admission, not a prerequisite exception.
+                    expected = [prerequisite["id"]]
+                    self.assertNotIn("wip_exception", payload["queue"][0])
                 self.assertEqual([action["id"] for action in payload["queue"]], expected)
                 if case in allowed:
                     action = next(action for action in payload["queue"] if action["id"] == prerequisite["id"])
@@ -448,8 +454,11 @@ class AdmissionPriorityTests(unittest.TestCase):
         anchor["labels"].append("owner-held")
         payload = self.plan(rows + [bead("bd-independent")], normalized((anchor, review)), lanes=2)
         self.assertEqual([a["id"] for a in payload["queue"]], ["bd-independent"])
+        one = self.plan(rows + [bead("bd-independent")], normalized((anchor, review)), lanes=1)
+        self.assertEqual([a["id"] for a in one["queue"]], ["bd-independent"])
+        anchor["labels"].remove("owner-held")
         full = self.plan(rows + [bead("bd-independent")], normalized((anchor, review)), lanes=1)
-        self.assertEqual(full["queue"], [])
+        self.assertEqual([a["id"] for a in full["queue"]], [review["id"]])
         self.assertEqual(anchor["assignee"], "coordinator:a")
 
     def test_foreign_live_correction_returns_to_existing_owner_without_claim_transfer(self):
@@ -604,6 +613,70 @@ class AdmissionPriorityTests(unittest.TestCase):
         self.assertEqual([a["id"] for a in payload["queue"]], ["bd-fire", review["id"]])
 
 
+class OwnedWipExclusionTests(unittest.TestCase):
+    """Owned WIP bounds what agents are building, not what waits on a human."""
+
+    def plan(self, rows, review_state=None, *, lanes=1, live=("coordinator:a",), kv=None):
+        return ranking.rank(snapshot(rows, kv={**live_registry(*live), **(kv or {})}), now=NOW, lanes=lanes,
+                            coordinator="coordinator:a", review_state=review_state or normalized())
+
+    def test_needs_human_park_of_a_live_owner_frees_wip_for_ready_work(self):
+        parked = bead("bd-parked", status="blocked", assignee="coordinator:a", labels=["needs-human"])
+        payload = self.plan([parked, bead("bd-new")])
+        self.assertEqual(payload["capacity"]["owned"], 0)
+        self.assertEqual(payload["capacity"]["owned_excluded"], {"owner_gate": ["bd-parked"], "dead_owner": []})
+        self.assertEqual([a["id"] for a in payload["queue"]], ["bd-new"])
+        self.assertNotIn("wip_exception", payload["queue"][0])
+        self.assertEqual(parked["assignee"], "coordinator:a")
+
+    def test_only_a_same_head_held_review_receipt_releases_the_anchor_wip(self):
+        for disposition, owned in (("held", 0), ("queued", 1), ("corrections", 1)):
+            with self.subTest(disposition=disposition):
+                anchor, review, rows = review_pair()
+                review["metadata"] = {"review_receipt": {"head": SHA, "disposition": disposition}}
+                payload = self.plan(rows, normalized((anchor, review)))
+                self.assertEqual(payload["capacity"]["owned"], owned)
+                self.assertEqual(payload["capacity"]["owned_excluded"]["owner_gate"], [anchor["id"]] if not owned else [])
+        anchor, review, rows = review_pair()
+        review["metadata"] = {"review_receipt": {"head": "b" * 40, "disposition": "held"}}
+        self.assertEqual(self.plan(rows, normalized((anchor, review)))["capacity"]["owned"], 1)
+
+    def test_blocked_claims_of_unregistered_or_expired_coordinators_are_adoptable_not_owned(self):
+        rows = [bead("bd-gone", status="blocked", assignee="coordinator:gone"),
+                bead("bd-expired", status="blocked", assignee="coordinator:expired"), bead("bd-new")]
+        expired = {"beads.coordinator.coordinator:expired": {"expires_at": "2026-10-27T03:00:00Z"}}
+        payload = self.plan(rows, kv=expired)
+        self.assertEqual(payload["capacity"]["owned"], 0)
+        self.assertEqual(payload["capacity"]["owned_excluded"]["dead_owner"], ["bd-expired", "bd-gone"])
+        self.assertEqual([entry["id"] for entry in payload["orphaned_blocked"]], ["bd-expired", "bd-gone"])
+        self.assertEqual([a["id"] for a in payload["queue"]], ["bd-new"])
+
+    def test_technical_waits_and_running_anchors_of_live_owners_still_count(self):
+        ci_wait = bead("bd-ci", status="blocked", assignee="coordinator:a", external_ref="gh-pr:7")
+        running = bead("bd-running", status="in_progress", assignee="coordinator:b", labels=["needs-human"])
+        payload = self.plan([ci_wait, running, bead("bd-new")], lanes=2, live=("coordinator:a", "coordinator:b"))
+        self.assertEqual(payload["capacity"]["owned"], 2)
+        self.assertEqual(payload["capacity"]["occupied"], 1)
+        self.assertEqual(payload["capacity"]["owned_excluded"], {"owner_gate": [], "dead_owner": []})
+        self.assertEqual(payload["queue"], [])
+        self.assertEqual(payload["admission"]["waiting"], [{"id": "bd-new", "reason": "owned-wip-budget-full"}])
+
+    def test_four_gate_parked_dead_claims_do_not_stall_a_four_lane_budget(self):
+        owner = "coordinator:codex-20261114-"
+        parks = [bead("hud-avr7s.4", status="blocked", assignee=owner + "1", labels=["needs-human"]),
+                 bead("hud-h51u7.4.6", status="blocked", assignee=owner + "2", labels=["needs-human"]),
+                 bead("hud-ljhku.5", status="blocked", assignee=owner + "3", labels=["human-gate"])]
+        anchor, review, pair = review_pair("h51u7.8.3", owner=owner + "4")
+        review["metadata"] = {"review_receipt": {"head": SHA, "disposition": "held"}}
+        payload = self.plan([*parks, *pair, bead("hud-next")], normalized((anchor, review)), lanes=4, live=())
+        excluded = payload["capacity"]["owned_excluded"]
+        self.assertEqual(payload["capacity"]["owned"], 0)
+        self.assertEqual(sorted(excluded["owner_gate"]), sorted(excluded["dead_owner"]))
+        self.assertEqual(len(excluded["owner_gate"]), 4)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual([a["id"] for a in payload["queue"]], ["hud-next"])
+
+
 class DeliveryPackageSchedulingTests(unittest.TestCase):
     def test_retained_one_bead_pr_owner_uses_the_same_capacity_with_or_without_manifest(self):
         owner = "coordinator:a"
@@ -686,7 +759,7 @@ class DeliveryPackageSchedulingTests(unittest.TestCase):
         for member in members[1:]:
             member["metadata"] = {"delivery_anchor": anchor["id"]}
         unrelated = bead("bd-calendar")
-        payload = ranking.rank(snapshot([*members, unrelated]), now=NOW, coordinator=owner)
+        payload = ranking.rank(snapshot([*members, unrelated], kv=live_registry(owner)), now=NOW, coordinator=owner)
         self.assertEqual(payload["capacity"]["occupied"], 0)
         self.assertEqual(payload["capacity"]["owned"], 1)
         self.assertEqual(queue_ids(payload), ["bd-calendar"])
