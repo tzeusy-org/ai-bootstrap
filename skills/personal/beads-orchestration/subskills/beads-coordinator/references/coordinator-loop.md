@@ -234,6 +234,11 @@ Reviews outrank ordinary new implementation, then corrections/resumes retain the
 owner; P0 keeps emergency precedence. Once higher-class actions are admitted or
 running, spare slots can advance disjoint work. Runtime safety owns active-slot,
 WIP, parked-owner and native-thread rules; claims and sessions survive waits.
+An author before review handoff remains running work when normalization binds
+the exact discovered PR/branch to a stable current head and admission confirms
+the same live author and clear package gates, independently of CI status. Keep
+the missing-wiring advisory visible; it does not create an unstarted review job.
+Absent or conflicting evidence keeps the existing reconciliation barrier.
 
 A prerequisite shared by several outcomes gets one owner. A hard hold gates its
 dependent work, rather than demanding universal idleness. Allow bounded disjoint
