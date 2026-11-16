@@ -64,7 +64,10 @@ claim whose coordinator has no live registration keep their claims but leave
 additive to v2). Lanes keep working while the human acts; dead claims are
 adoptable, not held. Technical waits (CI, review, merge queue) still count. Running higher-priority work
 consumes slots without idling the rest; unadmitted peer-owned higher work
-requires owner resumption before unrelated admissions.
+requires owner resumption before unrelated admissions. An unhanded-off author
+is running work only with the normalizer's stable PR/branch/head proof and the
+same live in-progress owner, independently of CI status; its wiring warning
+remains visible without idling spare capacity.
 One emergency or runnable prerequisite of retained parked work may overflow
 owned WIP by one when execution is free. At budget+1 no further overflow is
 admitted, even if that extra package parks. Execution never exceeds budget.
@@ -531,6 +534,27 @@ def admission_queue(candidates, rows, delivery_anchors, regs, capacity, review_s
                 and review.get("status") == "in_progress" and owner.startswith(COORDINATOR_PREFIX)
                 and regs.get(owner, {}).get("live"))
 
+    def running_author(event):
+        """Only fresh, unhanded-off author work makes its wiring advisory nonblocking."""
+        anchor = event.get("original_id")
+        record = rows.get(anchor, {}) if isinstance(anchor, str) else {}
+        owner = text(record.get("assignee"))
+        evidence = event.get("author_activity")
+        head = event.get("head_sha")
+        return (isinstance(evidence, dict) and event.get("canonical_review_id") is None
+                and event.get("recommendation") == "self-heal-original-and-review-wiring"
+                and event.get("context_status") == "resolved" and event.get("pr_state") == "OPEN"
+                and type(event.get("pr_number")) is int and event["pr_number"] > 0
+                and isinstance(head, str) and SHA_RE.fullmatch(head)
+                and evidence.get("head_sha") == head
+                and evidence.get("branch") == f"agent/{anchor}" and evidence.get("assignee") == owner
+                and record.get("status") == "in_progress" and not labels_of(record) & REVIEW_LABELS
+                and owner.startswith(COORDINATOR_PREFIX) and regs.get(owner, {}).get("live")
+                and text(record.get("external_ref")) in {"", f"gh-pr:{event['pr_number']}"}
+                and delivery_anchors.get(anchor, anchor) == anchor and not hard_gate(anchor)
+                and sum(item.get("original_id") == anchor for item in healing) == 1
+                and not any(f.get("original_id") == anchor for f in findings))
+
     def append_action(kind, anchor, review_id=None, candidate=None):
         nonlocal pending_higher, pending_prerequisite
         record = rows.get(anchor)
@@ -652,6 +676,10 @@ def admission_queue(candidates, rows, delivery_anchors, regs, capacity, review_s
     pending_wiring = [event for event in healing if event.get("recommendation") != "review-wiring-current"]
     if pending_wiring:
         waiting.append({"id": None, "reason": "review-wiring-required"})
+    # Proven author work already occupies execution/WIP. Its missing
+    # review wiring stays visible without inventing an unstarted global job.
+    pending_wiring = [event for event in pending_wiring if not running_author(event)]
+    if pending_wiring:
         pending_higher = True
         if any(not (event.get("recommendation") == "self-heal-original-wiring"
                     and event.get("context_status") == "resolved"

@@ -175,6 +175,61 @@ class AdmissionPriorityTests(unittest.TestCase):
         self.assertEqual(payload["capacity"]["occupied"], 1)
         self.assertEqual([item["kind"] for item in payload["queue"]], ["implementation"])
 
+        for case in ("live", "bound-ref", "full", "dead-owner", "owner-changed", "parked", "handed-off",
+                     "conflicting-ref", "unknown-head", "head-mismatch", "wrong-branch",
+                     "malformed-proof", "actual-review", "held", "blocked", "ambiguous-binding"):
+            with self.subTest(author_case=case):
+                author = bead("bd-author", status="in_progress", assignee="coordinator:b")
+                event = {"original_id": author["id"], "canonical_review_id": None, "pr_number": 1,
+                         "context_status": "resolved", "recommendation": "self-heal-original-and-review-wiring",
+                         "pr_state": "OPEN", "head_sha": SHA,
+                         "author_activity": {"assignee": "coordinator:b", "head_sha": SHA,
+                            "branch": "agent/bd-author"}}
+                state = normalized()
+                state.update(status="success", self_heal_candidates=[event])
+                rows = [author, bead("bd-new")]
+                lanes = 1 if case == "full" else 2
+                if case == "bound-ref":
+                    author["external_ref"] = "gh-pr:1"
+                if case == "ambiguous-binding":
+                    state["self_heal_candidates"].append({**event, "pr_number": 2})
+                if case == "dead-owner":
+                    author["assignee"] = event["author_activity"]["assignee"] = "coordinator:gone"
+                if case == "owner-changed":
+                    author["assignee"] = "coordinator:r"
+                if case == "parked":
+                    author["status"] = "blocked"
+                if case == "handed-off":
+                    author["labels"] = ["pr-review"]
+                if case == "conflicting-ref":
+                    author["external_ref"] = "gh-pr:2"
+                if case == "unknown-head":
+                    event["head_sha"] = None
+                if case == "head-mismatch":
+                    event["author_activity"]["head_sha"] = "b" * 40
+                if case == "wrong-branch":
+                    event["author_activity"]["branch"] = "agent/bd-other"
+                if case == "malformed-proof":
+                    event["author_activity"] = []
+                if case == "held":
+                    author["labels"] = ["owner-held"]
+                if case == "blocked":
+                    author["dependencies"] = [{"issue_id": author["id"], "depends_on_id": "bd-unknown", "type": "blocks"}]
+                if case == "actual-review":
+                    anchor, review, review_rows = review_pair("other", owner="coordinator:b")
+                    review["assignee"] = "coordinator:r"
+                    rows.extend(review_rows)
+                    state["findings"] = normalized((anchor, review))["findings"]
+                    lanes = 4
+                before = json.dumps((rows, state), sort_keys=True)
+                payload = self.plan(rows, state, lanes=lanes)
+                expected = ["bd-new"] if case in {"live", "bound-ref"} else []
+                self.assertEqual([item["id"] for item in payload["queue"]], expected)
+                self.assertEqual(payload["capacity"]["occupied"], 0 if case == "parked" else 1)
+                self.assertIn({"id": None, "reason": "review-wiring-required"}, payload["admission"]["waiting"])
+                self.assertLessEqual(len(payload["queue"]), payload["capacity"]["free"])
+                self.assertEqual(json.dumps((rows, state), sort_keys=True), before)
+
     def test_review_record_hard_gates_block_only_its_review_execution(self):
         anchor, review, rows = review_pair()
         # The normal implementation -> review edge is not a review blocker.

@@ -288,10 +288,13 @@ def view_pr(
     pr_number: int,
     cache: dict[int, tuple[dict[str, Any] | None, str | None]],
     repo_root: Path,
+    *,
+    with_branch: bool = False,
 ) -> tuple[dict[str, Any] | None, str | None]:
     if pr_number not in cache:
+        fields = "number,state,mergedAt,createdAt,headRefOid" + (",headRefName" if with_branch else "")
         payload, error = command_json(
-            ["gh", "pr", "view", str(pr_number), "--json", "number,state,mergedAt,createdAt,headRefOid"],
+            ["gh", "pr", "view", str(pr_number), "--json", fields],
             repo_root,
         )
         if error:
@@ -450,6 +453,27 @@ def legacy_branch_original(
     return original_id
 
 
+def author_activity_evidence(
+    original: dict[str, Any], number: int, branch: str, repo_root: Path,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Bind an unhanded-off author to one stable current PR/branch/head."""
+    before, error = view_pr(number, {}, repo_root, with_branch=True)
+    if error:
+        return None, error
+    if before["state"] != "OPEN" or before.get("headRefName") != branch:
+        return None, "author-pr-association-changed"
+    # Never reuse a cached head to certify the live association. CI status is
+    # diagnostic: it cannot turn an active author into an unstarted review job.
+    after, error = view_pr(number, {}, repo_root, with_branch=True)
+    if error:
+        return None, error
+    if (after["state"] != "OPEN" or after.get("headRefName") != branch
+            or after["headRefOid"] != before["headRefOid"]):
+        return None, "author-pr-head-changed"
+    return {"assignee": original["assignee"], "branch": branch,
+            "head_sha": before["headRefOid"]}, None
+
+
 def self_heal_candidates(
     *,
     repo_root: Path,
@@ -598,16 +622,31 @@ def self_heal_candidates(
         else:
             recommendation = "self-heal-original-and-review-wiring"
 
-        candidates.append(
-            {
-                "canonical_review_id": canonical,
-                "context_status": "resolved",
-                "cooldown_until": format_time(created_at + COOLDOWN),
-                "original_id": original_id,
-                "pr_number": number,
-                "recommendation": recommendation,
-            }
-        )
+        candidate = {
+            "canonical_review_id": canonical,
+            "context_status": "resolved",
+            "cooldown_until": format_time(created_at + COOLDOWN),
+            "original_id": original_id,
+            "pr_number": number,
+            "recommendation": recommendation,
+        }
+        # Publication alone is not an independent-review handoff. Keep the
+        # wiring advisory, while allowing admission to recognize proven work.
+        if (task_lookup_complete and canonical is None
+                and original.get("status") == "in_progress"
+                and isinstance(original.get("assignee"), str)
+                and original["assignee"].startswith("coordinator:")
+                and not original_labels & {"pr-review", "pr-review-task", "review-correction"}
+                and original.get("external_ref") in (None, "", f"gh-pr:{number}")
+                and branch == f"agent/{original_id}"
+                and sum(isinstance(pr, dict) and pr.get("headRefName") == branch for pr in payload) == 1):
+            evidence, error = author_activity_evidence(original, number, branch, repo_root)
+            if error:
+                report_error(errors, error, "author-activity")
+                discovery_complete = False
+            elif evidence:
+                candidate.update(author_activity=evidence, head_sha=evidence["head_sha"], pr_state="OPEN")
+        candidates.append(candidate)
     return (
         sorted(candidates, key=lambda item: (str(item["original_id"]), int(item["pr_number"] or 0))),
         discovery_complete,

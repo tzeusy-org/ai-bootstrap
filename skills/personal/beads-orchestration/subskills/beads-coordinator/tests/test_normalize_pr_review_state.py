@@ -172,6 +172,11 @@ def install_fakes(fake_bin: FakeBinDir) -> None:
                 print(failure, file=sys.stderr)
                 raise SystemExit(1)
             payload = fixture.get("prs", {}).get(str(number))
+            sequence = fixture.get("pr_view_sequence")
+            if sequence:
+                previous = [json.loads(line) for line in open(os.environ["NORMALIZER_CALLS"])]
+                count = sum(call["tool"] == "gh" and call["argv"][:3] == argv[:3] for call in previous)
+                payload = sequence[min(count - 1, len(sequence) - 1)]
             if payload is None:
                 print("unmatched pr " + str(number), file=sys.stderr)
                 raise SystemExit(1)
@@ -359,9 +364,11 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                 "blocked_pr_review_tasks": [],
                 "shows": {
                     original_id: [original_bead(original_id, 41)],
-                    self_heal_id: [{"id": self_heal_id, "status": "open", "external_ref": "", "labels": []}],
+                    self_heal_id: [{"id": self_heal_id, "status": "in_progress", "external_ref": "", "labels": [],
+                                    "assignee": "coordinator:peer"}],
                 },
-                "prs": {"41": pr_payload("OPEN")},
+                "prs": {"41": pr_payload("OPEN"),
+                        "42": {**pr_payload("OPEN"), "number": 42, "headRefName": f"agent/{self_heal_id}"}},
                 "open_prs": [
                     {
                         "number": 42,
@@ -394,6 +401,7 @@ class NormalizePrReviewStateTests(unittest.TestCase):
             "gh": {
                 ("pr", "list", "--state", "open", "--json", "number,headRefName,createdAt"),
                 ("pr", "view", "41", "--json", "number,state,mergedAt,createdAt,headRefOid"),
+                ("pr", "view", "42", "--json", "number,state,mergedAt,createdAt,headRefOid,headRefName"),
             },
             "git": set(),
         }
@@ -1540,6 +1548,58 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                     payload["self_heal_candidates"][0]["recommendation"],
                     recommendation,
                 )
+
+        # An unhanded-off author may still be repairing the published PR.
+        # Bind the discovered branch to a stable head independently of CI;
+        # do not turn ordinary/unknown wiring into proof of running work.
+        for case in ("ci-failed", "bound-ref", "ci-passed", "ci-pending", "ci-missing",
+                     "transition", "closed", "wrong-branch", "conflicting-ref", "handed-off", "parked", "ambiguous-branch"):
+            with self.subTest(author_case=case):
+                author = {"id": original_id, "status": "in_progress", "labels": [],
+                          "assignee": "coordinator:peer", "external_ref": ""}
+                current = {**pr_payload("OPEN"), "headRefName": f"agent/{original_id}"}
+                if case != "ci-missing":
+                    current["statusCheckRollup"] = [{"name": "cargo test", "conclusion": {
+                        "ci-passed": "SUCCESS", "ci-pending": None}.get(case, "FAILURE")}]
+                fixture = {"shows": {original_id: [author]}, "prs": {"41": current},
+                           "open_prs": [{"number": 41, "headRefName": f"agent/{original_id}",
+                                         "createdAt": "2026-08-14T03:00:00Z"}]}
+                if case == "bound-ref":
+                    author["external_ref"] = "gh-pr:41"
+                if case == "ambiguous-branch":
+                    fixture["open_prs"].append({**fixture["open_prs"][0], "number": 42})
+                if case == "transition":
+                    fixture["pr_view_sequence"] = [current, {**current, "headRefOid": "b" * 40}]
+                if case == "closed":
+                    current["state"] = "CLOSED"
+                if case == "wrong-branch":
+                    current["headRefName"] = "agent/aib-other"
+                if case == "conflicting-ref":
+                    author["external_ref"] = "gh-pr:42"
+                if case == "handed-off":
+                    author["labels"] = ["pr-review"]
+                if case == "parked":
+                    author["status"] = "blocked"
+                result, calls, _ = self.run_fixture(fixture)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                payload = json.loads(result.stdout)
+                candidate = payload["self_heal_candidates"][0]
+                if case in {"ci-failed", "bound-ref", "ci-passed", "ci-pending", "ci-missing"}:
+                    self.assertEqual(payload["status"], "success")
+                    self.assertEqual(candidate["recommendation"], "self-heal-original-and-review-wiring")
+                    self.assertEqual(candidate["author_activity"], {
+                        "assignee": "coordinator:peer", "head_sha": current["headRefOid"],
+                        "branch": f"agent/{original_id}"})
+                    views = [call for call in calls if call["tool"] == "gh" and call["argv"][:2] == ["pr", "view"]]
+                    self.assertEqual(len(views), 2)
+                    self.assertFalse(any(call["argv"][:2] == ["pr", "checks"]
+                                         or any("statusCheckRollup" in arg for arg in call["argv"])
+                                         for call in calls if call["tool"] == "gh"))
+                else:
+                    self.assertNotIn("author_activity", candidate)
+                if case in {"transition", "closed", "wrong-branch"}:
+                    self.assertEqual(payload["status"], "partial")
+                    self.assertEqual(candidate["recommendation"], "manual-triage")
 
     def test_open_pr_discovery_finalizes_collection_actionability(self) -> None:
         original_id = "aib-swr.1"
