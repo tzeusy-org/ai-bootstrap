@@ -273,7 +273,7 @@ troubleshooting steps instead. Use `bd dolt status`, `bd version`, and
   server, NOT the split-brain signal described below, so the re-init the old
   "real fix" called for was not needed. The orphaned per-project data-dir
   `.beads/dolt` (21 MB, last written 2026-08-30) was moved to
-  `~/.tmp/beads-mirror/orphan-aib-cli-dir-20261021/`; `.beads/embeddeddolt/aib`
+  `~/.tmp/aib-beads-leftovers-20261121/orphan-aib-cli-dir-20261021/` (moved there with the mirror's retirement under aib-82o); `.beads/embeddeddolt/aib`
   (2026-07-03) is a second pre-migration leftover, left in place. The
   historical entry follows for its symptom text; drop it one revision later.
 - **Symptom**: `bd update`/`bd close`/`bd update --claim` print `✓ Updated`/
