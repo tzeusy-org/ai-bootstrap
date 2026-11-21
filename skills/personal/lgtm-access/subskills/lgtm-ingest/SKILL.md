@@ -29,8 +29,9 @@ shared production data immediately. Choose the path, send, verify with
 Alloy fans out: traces → Tempo, logs → Loki, metrics → Prometheus.
 
 ```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://otel.TAILNET:4318      # HTTP/protobuf
-# or gRPC: http://otel.TAILNET:4317 (plaintext; set insecure=true in SDKs)
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://otel.TAILNET:4318
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf   # some SDKs default to gRPC
+# or gRPC: endpoint http://otel.TAILNET:4317, protocol grpc (plaintext; insecure=true)
 export OTEL_SERVICE_NAME=<service>
 export OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=<dev|prod>
 ```
@@ -55,7 +56,8 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Content-Type: application/json' \
 ## Pushgateway
 
 For jobs that exit before a scrape. Groups persist on disk until deleted
-and never go stale, so a test push stays visible forever.
+and never go stale. Deleting a group stops new samples; what Prometheus
+already scraped stays in Thanos.
 
 ```bash
 G=https://prometheus-pushgateway.TAILNET
@@ -79,14 +81,15 @@ Receiver enabled at `https://prometheus.TAILNET/api/v1/write`; in-cluster
 2. Logs and traces: `lgtm.py logs '{service_name="<service>"}' --since 10m`
    or `lgtm.py traces --traceql '{ resource.service.name = "<service>" }'`
    (credentialed).
-3. Test data: delete Pushgateway groups now. OTLP test series cannot be
-   deleted, so test under a throwaway `service.name` (`test-<name>`) and say
-   so in the report.
+3. Test data: delete Pushgateway groups now. Scraped, OTLP and
+   remote-written samples cannot be deleted (Thanos keeps 1-hour data
+   forever), so send tests only under a throwaway `job` / `service.name`
+   (`test-<name>`) and say so in the report.
 
 ## Hard stops
 
 - No secrets, tokens or personal data in log lines, span attributes or
   labels.
 - No unbounded label values (request IDs, timestamps, user input, full
-  URLs): each value is a new series kept for months in Thanos.
+  URLs): each value is a new series, kept forever in Thanos.
 - Do not reuse an existing `job` or `service.name` for test data.

@@ -100,5 +100,48 @@ class OutputTests(unittest.TestCase):
         self.assertEqual(out.getvalue().strip(), "{}  points=2 first=1 last=4")
 
 
+    def test_scalar_and_string_results_print_value(self):
+        for kind, value in (("scalar", "36"), ("string", "hello")):
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                lgtm.emit_vector({"resultType": kind, "result": [0, value]}, limit=5)
+            self.assertEqual(out.getvalue().strip(), value)
+
+    def test_matrix_series_without_points_does_not_crash(self):
+        data = {"resultType": "matrix", "result": [{"metric": {"job": "a"}, "values": []}]}
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            lgtm.emit_vector(data, limit=5)
+        self.assertEqual(out.getvalue().strip(), '{job="a"}  points=0')
+
+    def test_clip_keeps_one_line_per_item(self):
+        self.assertEqual(lgtm.clip("a\nb\r\n"), "a⏎b⏎")
+
+    def test_empty_trace_reports_not_found(self):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            lgtm.emit_trace({"trace": {}}, limit=5)
+        self.assertIn("trace not found", out.getvalue())
+
+
+class InputValidationTests(unittest.TestCase):
+    def run_main(self, argv):
+        with clean_env(LGTM_TAILNET="tailnet.test", GRAFANA_TOKEN="t"), \
+                mock.patch.object(lgtm, "datasource_uid", return_value="tempo"), \
+                mock.patch.object(lgtm, "get_json") as get_json, \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            code = lgtm.main(argv)
+        return code, err.getvalue(), get_json
+
+    def test_bad_trace_id_is_rejected_before_any_request(self):
+        code, err, get_json = self.run_main(["traces", "--id", "../admin"])
+        self.assertEqual(code, 1)
+        self.assertIn("bad trace id", err)
+        get_json.assert_not_called()
+
+    def test_bad_metric_regex_is_a_clean_error(self):
+        code, err, get_json = self.run_main(["metrics", "("])
+        self.assertEqual(code, 1)
+        self.assertIn("bad regex", err)
+        get_json.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

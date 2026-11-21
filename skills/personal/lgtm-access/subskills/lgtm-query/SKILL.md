@@ -22,7 +22,7 @@ those with `jq` too. `<pkg>` is the lgtm-access package root.
 | Question | Command | Credential |
 |---|---|---|
 | Current or recent (≤15d) metric value | `lgtm.py prom '<promql>' [--range 6h --step 5m]` | no |
-| Metric older than 15 days | add `--history` (Thanos via Grafana) | yes |
+| Metric older than 15 days | add `--history --ago 40d` (Thanos via Grafana) | yes |
 | Which metrics exist | `lgtm.py metrics '<regex>'` | no |
 | Is something not being scraped | `lgtm.py targets` (down only; `--all`) | no |
 | What is firing | `lgtm.py alerts` (`--all` adds silenced) | no |
@@ -30,20 +30,23 @@ those with `jq` too. `<pkg>` is the lgtm-access package root.
 | Traces | `lgtm.py traces [--traceql '<q>'] --since 1h`; `--id <trace>` for spans | yes |
 | Which dashboard shows it | `lgtm.py dashboards '<text>'` | yes |
 
-Credentialed commands run under `bws run`; see
-[lgtm-credentials](../lgtm-credentials/SKILL.md).
+Credentialed commands run under `bws run`, with the query passed in an env
+var; see [lgtm-credentials](../lgtm-credentials/SKILL.md).
 
 ## What each backend holds
 
 - Prometheus: every scrape job plus OTLP-pushed app metrics; list jobs with
   `lgtm.py prom 'count by (job) (up)' --limit 50`. Local retention 15 days.
 - Thanos (`--history`): same series; raw 30 days, 5-minute downsample 90
-  days, 1-hour forever. Long ranges need a coarse `--step` (≥1h).
-- Loki holds only logs sent over OTLP (labels `service_name`,
-  `k8s_namespace_name`, `k8s_pod_name`), not Kubernetes pod stdout. For pod
-  logs use `kubectl -n <ns> logs` (tze; orca only in its RBAC namespaces).
-- Tempo: traces sent over OTLP; search by `rootServiceName` via TraceQL,
-  e.g. `{ resource.service.name = "butlers" }`.
+  days, 1-hour forever. `--ago` moves an instant query or a range's end into
+  the past (or use PromQL `offset`). Thanos only uses data at resolution
+  ≤ step/5, so past 30 days use `--step 25m` or more, past 90 days `5h` or
+  more, or the result is empty.
+- Loki holds logs sent over OTLP plus Loki's own canary, not Kubernetes pod
+  stdout; run `loglabels` for the live label set. For pod logs use
+  `kubectl -n <ns> logs` (tze; orca only in its RBAC namespaces).
+- Tempo: traces sent over OTLP. TraceQL `{ resource.service.name = "x" }`
+  matches traces with any span from service `x`.
 
 ## PromQL discipline
 
@@ -66,8 +69,7 @@ curl -s "$P/api/v1/status/tsdb" | jq '.data.seriesCountByMetricName[:10]'
 curl -s "$A/api/v2/silences" | jq -r '.[] | select(.status.state=="active") | "\(.endsAt) \(.comment)"'
 ```
 
-Find a dashboard with `lgtm.py dashboards '<text>'` (credentialed); it
-prints each match's URL to hand to a human.
+`lgtm.py dashboards '<text>'` prints each match's URL to hand to a human.
 
 ## Reporting
 

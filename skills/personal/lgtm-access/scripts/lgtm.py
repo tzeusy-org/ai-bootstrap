@@ -14,13 +14,18 @@ environment (never on the command line, never printed):
   GRAFANA_USER + GRAFANA_PASSWORD               basic auth
   HOMEPAGE_VAR_GRAFANA_USER + ..._PASSWORD      basic auth (prod BWS names)
 
-Inject them with `bws run -- 'uv run lgtm.py ...'` (bws runs ONE shell string;
-unquoted multi-word commands are re-split); see the lgtm-credentials subskill. The tailnet suffix comes from LGTM_TAILNET, else
-`tailscale status --json`, else the `search` line of /etc/resolv.conf.
+Inject them with bws, passing query text through an env var so the shell
+that `bws run` spawns never parses it (see the lgtm-credentials subskill):
+
+  Q='{service_name="x"}' bws run -- 'uv run lgtm.py logs "$Q"'
+
+The tailnet suffix comes from LGTM_TAILNET, else `tailscale status --json`,
+else the `search` line of /etc/resolv.conf.
 
 Usage:
   lgtm.py doctor
-  lgtm.py prom 'sum by (namespace) (kube_pod_info)' [--history] [--range 6h --step 5m]
+  lgtm.py prom 'sum by (namespace) (kube_pod_info)' [--range 6h --step 5m]
+  lgtm.py prom 'count(up)' --history --ago 40d
   lgtm.py metrics '^node_filesystem'
   lgtm.py targets [--all]
   lgtm.py alerts [--all]
@@ -46,10 +51,21 @@ import urllib.request
 
 TIMEOUT_S = 20
 LINE_WIDTH = 220
+TRACE_ID = re.compile(r"[0-9a-fA-F]{1,32}")
 
 
 class LgtmError(Exception):
     """Expected failure with a message fit to show the agent."""
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse redirects so an Authorization header never follows one."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise LgtmError(f"refusing redirect ({code}) to {newurl.split('?')[0]}")
+
+
+OPENER = urllib.request.build_opener(_NoRedirect)
 
 
 def tailnet_suffix() -> str:
@@ -119,19 +135,24 @@ def credential_source() -> str:
 
 
 def get_json(url: str, params: dict | None = None, auth: str | None = None):
+    base = url
     if params:
         url = f"{url}?{urllib.parse.urlencode(params)}"
     request = urllib.request.Request(url, headers={"Accept": "application/json"})
     if auth:
         request.add_header("Authorization", auth)
     try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT_S) as response:
+        with OPENER.open(request, timeout=TIMEOUT_S) as response:
             return json.load(response)
     except urllib.error.HTTPError as err:
         body = err.read().decode(errors="replace")[:300].replace("\n", " ")
-        raise LgtmError(f"HTTP {err.code} from {url.split('?')[0]}: {body}") from None
+        raise LgtmError(f"HTTP {err.code} from {base}: {body}") from None
     except urllib.error.URLError as err:
-        raise LgtmError(f"cannot reach {url.split('?')[0]}: {err.reason}") from None
+        raise LgtmError(f"cannot reach {base}: {err.reason}") from None
+    except ValueError as err:  # includes JSONDecodeError
+        raise LgtmError(f"non-JSON response from {base}: {err}") from None
+    except OSError as err:  # read timeouts, resets
+        raise LgtmError(f"network error from {base}: {err}") from None
 
 
 def status_code(url: str, auth: str | None = None) -> str:
@@ -139,11 +160,11 @@ def status_code(url: str, auth: str | None = None) -> str:
     if auth:
         request.add_header("Authorization", auth)
     try:
-        with urllib.request.urlopen(request, timeout=8) as response:
+        with OPENER.open(request, timeout=8) as response:
             return str(response.status)
     except urllib.error.HTTPError as err:
         return str(err.code)
-    except (urllib.error.URLError, OSError) as err:
+    except (urllib.error.URLError, OSError, LgtmError) as err:
         return f"unreachable ({getattr(err, 'reason', err)})"
 
 
@@ -151,19 +172,19 @@ def require_grafana() -> str:
     auth = grafana_auth_header()
     if not auth:
         raise LgtmError(
-            "no Grafana credential in env; Loki, Tempo and --history need one. "
-            "Run under `bws run -- ...` (see the lgtm-credentials subskill)"
+            "no Grafana credential in env; Loki, Tempo, dashboards and --history "
+            "need one. Run under `bws run` (see the lgtm-credentials subskill)"
         )
     return auth
 
 
 def datasource_uid(kind: str, auth: str) -> str:
-    """Look up a datasource UID by type: Loki's UID is auto-generated."""
-    grafana = endpoints()["grafana"]
-    for source in get_json(f"{grafana}/api/datasources", auth=auth):
-        if source.get("type") == kind:
+    """Find a datasource UID by type via frontend settings (readable by Viewer)."""
+    settings = get_json(f"{endpoints()['grafana']}/api/frontend/settings", auth=auth)
+    for source in (settings.get("datasources") or {}).values():
+        if source.get("type") == kind and source.get("uid"):
             return source["uid"]
-    raise LgtmError(f"no {kind} datasource in Grafana")
+    raise LgtmError(f"no {kind} datasource visible to this Grafana credential")
 
 
 def parse_duration(text: str) -> int:
@@ -181,24 +202,26 @@ def fmt_labels(metric: dict) -> str:
 
 
 def clip(text: str) -> str:
+    text = text.replace("\r", "").replace("\n", "⏎")
     return text if len(text) <= LINE_WIDTH else text[: LINE_WIDTH - 1] + "…"
 
 
 def emit_vector(data: dict, limit: int) -> None:
-    result = data.get("result", [])
     kind = data.get("resultType")
+    result = data.get("result") or []
+    if kind in ("scalar", "string"):
+        print(result[1] if len(result) > 1 else "(empty result)")
+        return
     for series in result[:limit]:
         labels = fmt_labels(series.get("metric", {}))
         if kind == "matrix":
-            values = series.get("values", [])
-            first, last = values[0][1], values[-1][1]
-            print(clip(f"{labels}  points={len(values)} first={first} last={last}"))
-        elif kind == "vector":
-            print(clip(f"{labels}  {series['value'][1]}"))
+            values = series.get("values") or []
+            if values:
+                print(clip(f"{labels}  points={len(values)} first={values[0][1]} last={values[-1][1]}"))
+            else:
+                print(clip(f"{labels}  points=0"))
         else:
-            print(clip(json.dumps(series)))
-    if kind == "scalar":
-        print(data["result"][1])
+            print(clip(f"{labels}  {series.get('value', [None, '?'])[1]}"))
     if len(result) > limit:
         print(f"... {len(result) - limit} more series (raise --limit or aggregate)")
     if not result:
@@ -229,23 +252,26 @@ def cmd_prom(args: argparse.Namespace) -> None:
         base = f"{eps['grafana']}/api/datasources/proxy/uid/prometheus/api/v1"
     else:
         auth, base = None, f"{eps['prometheus']}/api/v1"
+    at = time.time() - (parse_duration(args.ago) if args.ago else 0)
     if args.range:
-        end = time.time()
         params = {
             "query": args.query,
-            "start": end - parse_duration(args.range),
-            "end": end,
+            "start": at - parse_duration(args.range),
+            "end": at,
             "step": args.step,
         }
         payload = get_json(f"{base}/query_range", params, auth)
     else:
-        payload = get_json(f"{base}/query", {"query": args.query}, auth)
+        payload = get_json(f"{base}/query", {"query": args.query, "time": at}, auth)
     emit_vector(payload["data"], args.limit)
 
 
 def cmd_metrics(args: argparse.Namespace) -> None:
+    try:
+        pattern = re.compile(args.regex)
+    except re.error as err:
+        raise LgtmError(f"bad regex {args.regex!r}: {err}") from None
     names = get_json(f"{endpoints()['prometheus']}/api/v1/label/__name__/values")["data"]
-    pattern = re.compile(args.regex)
     hits = [name for name in names if pattern.search(name)]
     for name in hits[: args.limit]:
         print(name)
@@ -254,21 +280,20 @@ def cmd_metrics(args: argparse.Namespace) -> None:
 
 def cmd_targets(args: argparse.Namespace) -> None:
     data = get_json(f"{endpoints()['prometheus']}/api/v1/targets", {"state": "active"})["data"]
-    rows = [
-        t for t in data["activeTargets"] if args.all or t.get("health") != "up"
-    ]
+    active = data.get("activeTargets") or []
+    rows = [t for t in active if args.all or t.get("health") != "up"]
     for t in rows:
         labels = t.get("labels", {})
         print(clip(
             f"{t.get('health')}  job={labels.get('job')} instance={labels.get('instance')} "
             f"err={t.get('lastError') or '-'}"
         ))
-    total = len(data["activeTargets"])
-    print(f"({len(rows)} shown of {total} active targets{'' if args.all else '; down only'})")
+    print(f"({len(rows)} shown of {len(active)} active targets{'' if args.all else '; down only'})")
 
 
 def cmd_alerts(args: argparse.Namespace) -> None:
-    params = {"active": "true", "silenced": str(args.all).lower(), "inhibited": str(args.all).lower()}
+    flag = str(args.all).lower()
+    params = {"active": "true", "silenced": flag, "inhibited": flag}
     alerts = get_json(f"{endpoints()['alertmanager']}/api/v2/alerts", params)
     for alert in alerts:
         labels = alert.get("labels", {})
@@ -281,45 +306,6 @@ def cmd_alerts(args: argparse.Namespace) -> None:
     print(f"({len(alerts)} alerts{'' if args.all else '; silenced/inhibited hidden'})")
 
 
-def cmd_logs(args: argparse.Namespace) -> None:
-    auth = require_grafana()
-    uid = datasource_uid("loki", auth)
-    end = time.time_ns()
-    params = {
-        "query": args.query,
-        "start": end - parse_duration(args.since) * 1_000_000_000,
-        "end": end,
-        "limit": args.limit,
-        "direction": "backward",
-    }
-    url = f"{endpoints()['grafana']}/api/datasources/proxy/uid/{uid}/loki/api/v1/query_range"
-    data = get_json(url, params, auth)["data"]
-    if data.get("resultType") != "streams":
-        emit_vector(data, args.limit)
-        return
-    lines = []
-    for stream in data["result"]:
-        labels = stream.get("stream", {})
-        tag = labels.get("service_name") or labels.get("k8s_pod_name") or labels.get("pod") or "-"
-        for ts, line in stream.get("values", []):
-            lines.append((int(ts), tag, line))
-    lines.sort(reverse=True)
-    for ts, tag, line in lines[: args.limit]:
-        stamp = time.strftime("%m-%d %H:%M:%S", time.gmtime(ts / 1e9))
-        print(clip(f"{stamp}Z {tag}  {line.strip()}"))
-    print(f"({min(len(lines), args.limit)} lines, newest first, {len(data['result'])} streams)")
-
-
-def cmd_loglabels(args: argparse.Namespace) -> None:
-    auth = require_grafana()
-    base = f"{endpoints()['grafana']}/api/datasources/proxy/uid/{datasource_uid('loki', auth)}/loki/api/v1"
-    for label in get_json(f"{base}/labels", auth=auth).get("data") or []:
-        values = get_json(f"{base}/label/{label}/values", auth=auth).get("data") or []
-        shown = ", ".join(values[: args.limit])
-        more = f" (+{len(values) - args.limit})" if len(values) > args.limit else ""
-        print(clip(f"{label}: {shown}{more}"))
-
-
 def cmd_dashboards(args: argparse.Namespace) -> None:
     auth = require_grafana()
     grafana = endpoints()["grafana"]
@@ -330,31 +316,88 @@ def cmd_dashboards(args: argparse.Namespace) -> None:
     print(f"({len(hits)} dashboards)")
 
 
+def loki_base(auth: str) -> str:
+    uid = datasource_uid("loki", auth)
+    return f"{endpoints()['grafana']}/api/datasources/proxy/uid/{uid}/loki/api/v1"
+
+
+def cmd_loglabels(args: argparse.Namespace) -> None:
+    auth = require_grafana()
+    base = loki_base(auth)
+    for label in get_json(f"{base}/labels", auth=auth).get("data") or []:
+        values = get_json(f"{base}/label/{urllib.parse.quote(label)}/values", auth=auth).get("data") or []
+        shown = ", ".join(values[: args.limit])
+        more = f" (+{len(values) - args.limit})" if len(values) > args.limit else ""
+        print(clip(f"{label}: {shown}{more}"))
+
+
+def cmd_logs(args: argparse.Namespace) -> None:
+    auth = require_grafana()
+    end = time.time_ns()
+    params = {
+        "query": args.query,
+        "start": end - parse_duration(args.since) * 1_000_000_000,
+        "end": end,
+        "limit": args.limit,
+        "direction": "backward",
+    }
+    data = get_json(f"{loki_base(auth)}/query_range", params, auth)["data"]
+    if data.get("resultType") != "streams":
+        emit_vector(data, args.limit)
+        return
+    lines = []
+    for stream in data.get("result") or []:
+        labels = stream.get("stream", {})
+        tag = labels.get("service_name") or labels.get("k8s_pod_name") or labels.get("pod") or "-"
+        for ts, line in stream.get("values", []):
+            lines.append((int(ts), tag, line))
+    lines.sort(reverse=True)
+    for ts, tag, line in lines[: args.limit]:
+        stamp = time.strftime("%m-%d %H:%M:%S", time.gmtime(ts / 1e9))
+        print(clip(f"{stamp}Z {tag}  {line.strip()}"))
+    print(f"({min(len(lines), args.limit)} lines, newest first, {len(data.get('result') or [])} streams)")
+
+
+def emit_trace(trace: dict, limit: int) -> None:
+    spans = []
+    for batch in trace.get("trace", trace).get("resourceSpans", []) or []:
+        attrs = batch.get("resource", {}).get("attributes", [])
+        service = next(
+            (a["value"].get("stringValue") for a in attrs if a.get("key") == "service.name"), "-",
+        )
+        for scope in batch.get("scopeSpans", []) or []:
+            for span in scope.get("spans", []) or []:
+                start, stop = int(span["startTimeUnixNano"]), int(span["endTimeUnixNano"])
+                spans.append((start, service, span.get("name"), (stop - start) / 1e6))
+    if not spans:
+        print("(trace not found or has no spans)")
+        return
+    spans.sort()
+    for _, service, name, ms in spans[:limit]:
+        print(clip(f"{ms:9.1f}ms  {service}  {name}"))
+    print(f"({min(len(spans), limit)} of {len(spans)} spans, by start time)")
+
+
 def cmd_traces(args: argparse.Namespace) -> None:
     auth = require_grafana()
     base = f"{endpoints()['grafana']}/api/datasources/proxy/uid/{datasource_uid('tempo', auth)}"
     if args.id:
-        trace = get_json(f"{base}/api/v2/traces/{args.id}", auth=auth)
-        spans = []
-        for batch in trace.get("trace", {}).get("resourceSpans", []):
-            service = next(
-                (a["value"].get("stringValue") for a in batch.get("resource", {}).get("attributes", [])
-                 if a.get("key") == "service.name"), "-",
-            )
-            for scope in batch.get("scopeSpans", []):
-                for span in scope.get("spans", []):
-                    start, stop = int(span["startTimeUnixNano"]), int(span["endTimeUnixNano"])
-                    spans.append((start, service, span.get("name"), (stop - start) / 1e6))
-        spans.sort()
-        for _, service, name, ms in spans[: args.limit]:
-            print(clip(f"{ms:9.1f}ms  {service}  {name}"))
-        print(f"({min(len(spans), args.limit)} of {len(spans)} spans, by start time)")
+        if not TRACE_ID.fullmatch(args.id):
+            raise LgtmError(f"bad trace id {args.id!r}: expected 1-32 hex characters")
+        try:
+            trace = get_json(f"{base}/api/v2/traces/{args.id}", auth=auth)
+        except LgtmError as err:
+            if "HTTP 404" in str(err):
+                print("(trace not found)")
+                return
+            raise
+        emit_trace(trace, args.limit)
         return
     end = int(time.time())
     params = {"limit": args.limit, "start": end - parse_duration(args.since), "end": end}
     if args.traceql:
         params["q"] = args.traceql
-    traces = get_json(f"{base}/api/search", params, auth).get("traces", [])
+    traces = get_json(f"{base}/api/search", params, auth).get("traces") or []
     for t in traces:
         print(clip(
             f"{t.get('traceID')}  {t.get('rootServiceName')}  {t.get('rootTraceName')}  "
@@ -364,7 +407,9 @@ def cmd_traces(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("doctor", help="resolve endpoints, check reachability and credential")
@@ -375,6 +420,7 @@ def build_parser() -> argparse.ArgumentParser:
                       help="query Thanos via Grafana (beyond Prometheus' 15d; needs credential)")
     prom.add_argument("--range", help="range window, e.g. 6h; omit for instant query")
     prom.add_argument("--step", default="5m")
+    prom.add_argument("--ago", help="evaluate (or end the range) this long ago, e.g. 40d")
     prom.add_argument("--limit", type=int, default=30)
 
     metrics = sub.add_parser("metrics", help="list metric names matching a regex")
@@ -387,11 +433,6 @@ def build_parser() -> argparse.ArgumentParser:
     alerts = sub.add_parser("alerts", help="active Alertmanager alerts")
     alerts.add_argument("--all", action="store_true", help="include silenced and inhibited")
 
-    logs = sub.add_parser("logs", help="LogQL query via Grafana (needs credential)")
-    logs.add_argument("query")
-    logs.add_argument("--since", default="1h")
-    logs.add_argument("--limit", type=int, default=50)
-
     dashboards = sub.add_parser("dashboards", help="search Grafana dashboards by title (needs credential)")
     dashboards.add_argument("text", nargs="?", default="")
     dashboards.add_argument("--limit", type=int, default=30)
@@ -399,7 +440,12 @@ def build_parser() -> argparse.ArgumentParser:
     loglabels = sub.add_parser("loglabels", help="Loki label names and sample values (needs credential)")
     loglabels.add_argument("--limit", type=int, default=8)
 
-    traces = sub.add_parser("traces",help="Tempo search or trace lookup via Grafana (needs credential)")
+    logs = sub.add_parser("logs", help="LogQL query via Grafana (needs credential)")
+    logs.add_argument("query")
+    logs.add_argument("--since", default="1h")
+    logs.add_argument("--limit", type=int, default=50)
+
+    traces = sub.add_parser("traces", help="Tempo search or trace lookup (needs credential)")
     traces.add_argument("--traceql")
     traces.add_argument("--id")
     traces.add_argument("--since", default="1h")
@@ -408,8 +454,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 COMMANDS = {
-    "doctor": cmd_doctor, "prom": cmd_prom, "metrics": cmd_metrics, "targets": cmd_targets,
-    "alerts": cmd_alerts, "dashboards": cmd_dashboards, "logs": cmd_logs, "loglabels": cmd_loglabels, "traces": cmd_traces,
+    "doctor": cmd_doctor,
+    "prom": cmd_prom,
+    "metrics": cmd_metrics,
+    "targets": cmd_targets,
+    "alerts": cmd_alerts,
+    "dashboards": cmd_dashboards,
+    "loglabels": cmd_loglabels,
+    "logs": cmd_logs,
+    "traces": cmd_traces,
 }
 
 

@@ -3,12 +3,12 @@ name: lgtm-access
 description: >
   Use to read from or write to the homelab LGTM observability stack (Grafana,
   Prometheus/Thanos, Loki, Tempo, Alertmanager, Pushgateway, Alloy OTLP) over
-  Tailscale, from a tze or orca session: querying metrics, logs, traces or
-  firing alerts, sending telemetry from an app or batch job, or getting the
-  credential a query needs. Route to one subskill per task. Triggers: "check
-  Prometheus", "query this metric", "what alerts are firing", "find the logs
-  for", "look up this trace", "send OTLP to the cluster", "push a metric",
-  "Grafana returns 401", "can orca read Loki".
+  Tailscale from a tze or orca session: query metrics, logs or traces, list
+  firing alerts, send telemetry, or get the Grafana credential a query needs.
+  Not for alert triage or tuning (alert-steward) or dashboard JSON
+  (generate-grafana-dashboards). Triggers: "query this metric", "find the
+  logs for", "look up this trace", "send OTLP to the cluster", "push a
+  metric", "Grafana returns 401".
 metadata:
   owner: tze
   authors:
@@ -53,7 +53,9 @@ environment carries (by name, never value).
 
 ## Subskills
 
-Load one. Discover with:
+Load one; a credentialed read also loads lgtm-credentials once. Kept as a
+superskill at the owner's request, so each workflow can grow without
+crowding the others. Discover with:
 
 ```bash
 PKG="$(dirname "<absolute-path-to-this-SKILL.md>")"
@@ -65,8 +67,6 @@ rg -n "^name:|^description:" "$PKG"/subskills/*/SKILL.md
 | Read metrics, logs, traces, alerts, targets, dashboards | [subskills/lgtm-query/SKILL.md](subskills/lgtm-query/SKILL.md) |
 | Send telemetry: OTLP from an app, Pushgateway from a batch job, remote_write | [subskills/lgtm-ingest/SKILL.md](subskills/lgtm-ingest/SKILL.md) |
 | Which identity can reach what; injecting a Grafana credential; 401/403/unreachable | [subskills/lgtm-credentials/SKILL.md](subskills/lgtm-credentials/SKILL.md) |
-
-A query that fails on auth goes to lgtm-credentials, then back to lgtm-query.
 
 ## Out of scope
 
@@ -81,7 +81,10 @@ In the homelab repo, when that checkout is available:
 
 - Never print, echo or log a credential, and never read one into context:
   inject with `bws run`, as lgtm-credentials shows.
+- Never put query text inside a `bws run` command string; pass it through
+  an env var (lgtm-credentials), since that string is re-parsed by a shell.
 - Never `kubectl get secret -o yaml/json` in namespace `lgtm`.
 - No Alertmanager writes (silences, expiries) and no Grafana writes
   (dashboards, datasources, users) unless the owner asked for that change.
-- Delete every Pushgateway group or test series you create in the same task.
+- Written series are permanent (Thanos keeps 1-hour data forever): send
+  test data only under a throwaway name, per lgtm-ingest.
