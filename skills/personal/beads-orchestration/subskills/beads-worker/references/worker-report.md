@@ -42,9 +42,11 @@ Omit `--recovery-state`, `--dirty-worktree`, `--unpushed-commits` and
 (never `@{u}`, which is `origin/main` for a worktree made from it), with
 `unknown`/`n/a` when git cannot say. `Recovery-State` then defaults to
 `branch-pushed` for a completed report or a pushed branch with no local work,
-`no-code-changes` for a bootstrap failure or a clean worktree with nothing
-unpushed, else `local-only`. A completed report requires
-`branch-pushed`, so it never claims `no-code-changes`.
+`no-code-changes` for a clean worktree with nothing unpushed (or a bootstrap
+failure where git shows no local work), else `local-only`. A completed report
+requires `branch-pushed`, and is refused while git shows HEAD ahead of
+`origin/<branch>` (a dirty worktree is allowed), so its handoff head is always
+on origin.
 
 ## Standard Usage
 

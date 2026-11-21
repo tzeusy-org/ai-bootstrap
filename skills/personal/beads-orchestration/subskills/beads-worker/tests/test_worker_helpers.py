@@ -570,6 +570,41 @@ class WorkerReportVocabularyTests(unittest.TestCase):
             self.assertEqual(report_field(result.stdout, "Unpushed-Commits"), "unknown")
             self.assertEqual(report_field(result.stdout, "Recovery-State"), "local-only")
 
+    def test_completed_report_with_an_unpushed_commit_is_refused(self) -> None:
+        # aib-3a1i: git's answer wins over a contradicting flag.
+        with tempfile.TemporaryDirectory() as tmp:
+            work = self.make_worktree(Path(tmp))
+            (work / "f").write_text("2\n")
+            self.git(work, "commit", "-q", "-am", "two")
+            for extra in ((), ("--unpushed-commits", "no")):
+                with self.subTest(extra=extra):
+                    result = self.emit(work, *self.PR, *extra)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("requires every commit pushed", result.stderr)
+                    self.assertEqual(result.stdout, "")
+
+    def test_completed_report_with_only_a_dirty_worktree_is_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work = self.make_worktree(Path(tmp))
+            (work / "scratch").write_text("untracked\n")
+            result = self.emit(work, *self.PR)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(report_field(result.stdout, "Dirty-Worktree"), "yes")
+            self.assertEqual(report_field(result.stdout, "Recovery-State"), "branch-pushed")
+
+    def test_bootstrap_failure_with_local_work_is_local_only(self) -> None:
+        invalid = ("--status", "invalid-runtime-context", "--handoff-path", "invalid-runtime-context",
+                   "--branch-pushed", "no")
+        with tempfile.TemporaryDirectory() as tmp:
+            work = self.make_worktree(Path(tmp))
+            clean = self.emit(work, *invalid)
+            (work / "g").write_text("dirty\n")
+            dirty = self.emit(work, *invalid)
+        self.assertEqual(report_field(clean.stdout, "Recovery-State"), "no-code-changes")
+        self.assertEqual(report_field(dirty.stdout, "Recovery-State"), "local-only")
+        unreadable = self.emit("/nonexistent", *invalid)
+        self.assertEqual(report_field(unreadable.stdout, "Recovery-State"), "no-code-changes")
+
     def test_unreadable_git_state_reports_unknown_not_clean(self) -> None:
         result = self.emit("/nonexistent", *self.BLOCKED, "--branch-pushed", "no")
         self.assertEqual(result.returncode, 0, result.stderr)
