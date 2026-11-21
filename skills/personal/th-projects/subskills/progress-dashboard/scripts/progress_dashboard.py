@@ -524,6 +524,16 @@ def bind_allowed(bind: str) -> bool:
     return address.version == 4 and (address.is_loopback or address in TAILSCALE_NETWORK)
 
 
+def log_tail(path: Path, limit: int = 400) -> str:
+    """The last bytes of a server log, for a startup error that explains itself."""
+    try:
+        with open(path, "rb") as log:
+            log.seek(max(0, log.seek(0, os.SEEK_END) - limit))
+            return log.read().decode("utf-8", "replace").strip().replace("\n", " | ")
+    except OSError:
+        return ""
+
+
 def serve(folder: Path, bind: str, port: int) -> dict:
     if not bind_allowed(bind):
         raise ValueError("bind must be an IPv4 loopback or explicit Tailscale address")
@@ -541,7 +551,8 @@ def serve(folder: Path, bind: str, port: int) -> dict:
         with open(log_path, "ab") as log:
             process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()),
                 "--root", str(folder.parent), "--slug", folder.name, "_serve", "--bind", bind,
-                "--port", str(port), "--instance", instance], stdin=subprocess.DEVNULL,
+                "--port", str(port), f"--instance={instance}"],  # a token may start with "-"
+                stdin=subprocess.DEVNULL,
                 stdout=log, stderr=log, start_new_session=True)
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
@@ -551,7 +562,8 @@ def serve(folder: Path, bind: str, port: int) -> dict:
                 threading.Thread(target=process.wait, daemon=True).start()
                 return {"url": current["url"], "pid": current["pid"], "reused": False}
             if process.poll() is not None:
-                raise ValueError(f"server startup failed; see {log_path}")
+                raise ValueError(f"server startup failed (exit {process.returncode}): "
+                                 f"{log_tail(log_path) or 'no output'}; see {log_path}")
             time.sleep(0.05)
         process.terminate()
         process.wait(timeout=3)

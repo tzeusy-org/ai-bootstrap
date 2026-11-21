@@ -147,7 +147,9 @@ class WorkspaceTests(WorkspaceFixture, unittest.TestCase):
 
     def test_start_defaults_identity_and_resumes_without_arguments(self):
         cli = [sys.executable, str(SCRIPTS / "progress_dashboard.py"), "--root", self.tmp.name, "--slug", "fresh"]
-        started = json.loads(subprocess.run([*cli, "start"], capture_output=True, text=True, check=True).stdout)
+        run = subprocess.run([*cli, "start"], capture_output=True, text=True)
+        self.assertEqual(run.returncode, 0, run.stderr)  # startup errors carry the server log tail
+        started = json.loads(run.stdout)
         self.addCleanup(subprocess.run, [*cli, "stop"], capture_output=True)
         self.assertEqual(started["revision"], 0)
         self.assertTrue(started["url"].startswith("http://127.0.0.1:"))
@@ -659,6 +661,20 @@ class BindAddressTests(unittest.TestCase):
 
 
 class LifecycleTests(unittest.TestCase):
+
+    def test_an_instance_token_starting_with_a_dash_still_starts(self):
+        """Spec: REQ-progress-dashboard-006. token_urlsafe yields a leading "-" about 1 in 64 starts."""
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = dashboard.workspace("dash-token", temporary)
+            dashboard.initialize(folder, title="Dash token", actor="owner", repo_root=temporary)
+            with patch.object(dashboard.secrets, "token_urlsafe", return_value="-" + "a" * 31):
+                server = dashboard.serve(folder, "127.0.0.1", 0)
+            try:
+                self.assertIn("/-aaaa", server["url"])
+                self.assertTrue(dashboard.health(dashboard.load(folder / "server.json")))
+            finally:
+                self.assertTrue(dashboard.stop(folder)["stopped"])
+
     def test_detached_start_reuse_stop_and_stale_pid_safety(self):
         """Spec: REQ-progress-dashboard-006."""
         with tempfile.TemporaryDirectory() as temporary:
