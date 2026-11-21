@@ -386,10 +386,14 @@ reports `packet_complete`, add `needs-shaping` so the ranker holds it for
 it. A packet-complete follow-up is ordinary ready work for any lane, its author
 included; independence comes from review, not from who implements. A
 prerequisite blocker that needs shaping parks the original until beads-writer
-shapes it, so never leave that silent: when the filer holds the context, shape
-it now (complete the packet per beads-writer, drop `needs-shaping`); otherwise
-record the hold on the original's notes (`waiting on shaping of <new-id>`) and
-name it in the report. Only a prerequisite blocker serializes the original:
+shapes it, so never leave that silent. When the filer holds the context and
+shaping needs no [hard-gate](../../../references/decision-autonomy.md) decision,
+shape it now: complete the packet per beads-writer and re-run `check_packet.py`
+before labelling, so a `packet_complete` blocker never gets `needs-shaping`
+(removing a label already set needs a field update alongside `--if-assignee`;
+see [guarded updates reject label-only edits](../../../references/known-errors.md#bd-131-guarded-updates-reject-label-only-edits)).
+Otherwise, including any hard-gate shaping, record the hold on the original's
+notes (`waiting on shaping of <new-id>`) and name it in the report. Only a prerequisite blocker serializes the original:
 
 ```bash
 bd --actor "$COORDINATOR_ID" dep add <original-id> <new-id>                       # prerequisite blocker
