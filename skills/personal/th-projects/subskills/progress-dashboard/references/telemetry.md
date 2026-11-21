@@ -36,7 +36,8 @@ are shown separately from parent-reported work/model/branch/PR context.
 ## Claude Code parent and known sub-agents
 
 `init` automatically watches `CLAUDE_CODE_SESSION_ID` when no runtime binding
-exists yet (a Codex binding wins if both are set). An existing workspace, a
+exists yet (a valid Codex binding wins if both are set; a failed Codex watch
+still lets Claude bind). An existing workspace, a
 missing variable or a custom home (`CLAUDE_CONFIG_DIR`, else `~/.claude`) uses:
 
 ```bash

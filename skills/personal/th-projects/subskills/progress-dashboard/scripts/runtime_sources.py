@@ -26,6 +26,8 @@ from loop_telemetry import validate_source
 
 MAX_SESSIONS = 200
 META_LIMIT = 64 * 1024
+METADATA_KEYS = {"codex": {"thread_id", "agent_path", "model"},
+                 "claude": {"thread_id", "agent_path", "model", "tool_use_id"}}
 CLAUDE_AGENT_LOG = re.compile(r"agent-([A-Za-z0-9_-]{1,64})\.jsonl")
 
 
@@ -88,9 +90,11 @@ def _claude_sessions(config: dict) -> list[dict]:
     parent = parents[0]
     rows = [{"id": clean["session_id"], "rollout_path": str(parent), "agent_path": None, "model": None,
              "tool_use_id": None, "description": None}]
-    folder = parent.with_suffix("") / "subagents"
+    session = parent.with_suffix("")
+    folder = session / "subagents"
     try:
-        logs = sorted(folder.glob("agent-*.jsonl")) if folder.is_dir() and not folder.is_symlink() else []
+        followable = not session.is_symlink() and folder.is_dir() and not folder.is_symlink()
+        logs = sorted(folder.glob("agent-*.jsonl")) if followable else []
     except OSError:
         logs = []
     if len(logs) > MAX_SESSIONS:
@@ -186,8 +190,11 @@ def resolve(config: dict, actor: str, agents: list[dict], explicit: list[dict]) 
         # Claude agent ids are not UUIDs; their identity lives in the metadata.
         selector = {"thread_id": row["id"]} if provider == "codex" else {}
         source = validate_source({"id": agent_id, "provider": provider, "path": row["rollout_path"], **selector})
-        bindings.append((source, {"thread_id": row["id"], "agent_path": row["agent_path"],
-                                  "model": row["model"]}))
+        metadata = {"thread_id": row["id"], "agent_path": row["agent_path"], "model": row["model"]}
+        if provider == "claude":
+            # Kept so a tool-use-id selector still names this binding during an outage.
+            metadata["tool_use_id"] = row["tool_use_id"]
+        bindings.append((source, metadata))
     sources, runtime, merged_warnings = _merge(bindings, explicit)
     return sources, runtime, sorted(set(warnings + merged_warnings))
 
@@ -226,14 +233,15 @@ def retain(config: dict, actor: str, agents: list[dict], saved: dict, explicit: 
         metadata = saved["metadata"].get(source["id"])
         if (source["provider"] != provider or provider not in ("codex", "claude")
             or (provider == "codex" and not source.get("thread_id"))
-            or not isinstance(metadata, dict) or set(metadata) != {"thread_id", "agent_path", "model"}
+            or not isinstance(metadata, dict) or set(metadata) != METADATA_KEYS.get(provider)
             or not isinstance(metadata["thread_id"], str)
             or (provider == "codex" and metadata["thread_id"] != source["thread_id"])
             or any(metadata[key] is not None and not isinstance(metadata[key], str)
-                   for key in ("agent_path", "model"))):
+                   for key in metadata.keys() - {"thread_id"})):
             raise ValueError("retained runtime identity is invalid; restore the runtime index")
         selector = selectors.get(source["id"])
         # A selector that no longer names the retained identity drops it: no stale counts.
-        if source["id"] in expected and (not selector or selector == metadata["thread_id"]):
+        if source["id"] in expected and (not selector or selector in (metadata["thread_id"],
+                                                                         metadata.get("tool_use_id"))):
             bindings.append((source, metadata))
     return _merge(bindings, explicit)

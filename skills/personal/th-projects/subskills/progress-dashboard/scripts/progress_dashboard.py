@@ -656,11 +656,11 @@ def main() -> int:
                     result.update(watch_codex(folder, args.codex_thread, args.codex_home))
                 except ValueError as error:
                     result["usage_warning"] = str(error)
-            if args.claude_session and not (folder / "runtime.json").exists() and "usage_warning" not in result:
+            if args.claude_session and not (folder / "runtime.json").exists():
                 try:
                     result.update(watch_claude(folder, args.claude_session, args.claude_home))
                 except ValueError as error:
-                    result["usage_warning"] = str(error)
+                    result["usage_warning"] = " ".join(filter(None, (result.get("usage_warning"), str(error))))
             if args.command == "start":
                 result["url"] = serve(folder, args.bind, args.port)["url"]
         elif args.command == "checkpoint":

@@ -545,6 +545,31 @@ class ClaudeRuntimeTests(WorkspaceFixture, unittest.TestCase):
         self.assertEqual({row["id"] for row in retained}, {"owner", "r"})
         retained, kept, _ = retain(config, "owner", [{"id": "r", "thread_id": "other"}], saved, [])
         self.assertEqual({row["id"] for row in retained}, {"owner"})
+        # A binding proven by tool-use id must survive an outage under that same selector.
+        roster = [{"id": "r", "thread_id": "toolu_review"}]
+        proven, identities, _ = resolve(config, "owner", roster, [])
+        saved = {"config": config, "sources": proven, "metadata": identities}
+        retained, kept, _ = retain(config, "owner", roster, saved, [])
+        self.assertEqual({row["id"] for row in retained}, {"owner", "r"})
+        self.assertEqual(kept["r"]["thread_id"], "a1b2c3")
+
+    def test_a_symlinked_session_folder_is_not_followed(self):
+        """Spec: REQ-progress-dashboard-004."""
+        elsewhere = Path(self.tmp.name) / "elsewhere"
+        self.session.rename(elsewhere)
+        self.session.symlink_to(elsewhere, target_is_directory=True)
+        _, metadata, _ = resolve(self.config(), "owner", [{"id": "r", "thread_id": "a1b2c3"}], [])
+        self.assertNotIn("r", metadata)
+
+    def test_a_failed_codex_watch_still_lets_claude_bind(self):
+        """Spec: REQ-progress-dashboard-004."""
+        result = subprocess.run([sys.executable, str(SCRIPTS / "progress_dashboard.py"),
+            "--root", self.tmp.name, "--slug", "both", "init"],
+            env={**os.environ, "CODEX_THREAD_ID": "not-a-uuid", "CLAUDE_CODE_SESSION_ID": self.parent,
+                 "CLAUDE_CONFIG_DIR": str(self.home)}, capture_output=True, text=True, check=True)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["watching"], "claude")
+        self.assertIn("Codex", payload["usage_warning"])
 
 
 class HttpTests(WorkspaceFixture, unittest.TestCase):
