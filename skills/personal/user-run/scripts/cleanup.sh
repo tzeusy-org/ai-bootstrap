@@ -61,7 +61,7 @@ for dir in "$base"/*/; do
   while IFS= read -r log; do
     id="$(basename "$log" .log)"
     [ "$id" = "$latest" ] && continue
-    remove "$log" "$dir/$id.exit" "$dir/$id.started" "$dir/payload.$id.sh" "$dir/artifacts/$id"
+    remove "$log" "$dir/$id.exit" "$dir/$id.started" "$dir/$id.done.json" "$dir/payload.$id.sh" "$dir/artifacts/$id"
   done < <(find "$dir" -maxdepth 1 -type f -regextype posix-extended \
              -regex '.*/[0-9]{14}\.log' -mmin +"$mins" 2>/dev/null)
   exec 9<&-

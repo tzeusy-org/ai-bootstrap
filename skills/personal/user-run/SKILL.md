@@ -7,7 +7,7 @@ metadata:
     - tze
     - Claude Opus 5.5
   status: active
-  last_reviewed: "2026-10-09"
+  last_reviewed: "2026-11-21"
 ---
 
 # User Run
@@ -38,6 +38,8 @@ the payload; never `~`, which expands to `/home/tze` there.
   <RUN_ID>.log             full stdout+stderr of one run (RUN_ID = YYYYmmddHHMMSS)
   <RUN_ID>.exit            exit code; absent if the run died
   <RUN_ID>.started         written once su succeeded and the payload began
+  <RUN_ID>.done.json       completion marker (exit, duration, artifacts), written last
+  .delivered               last run watch.py reported to a session
   payload.<RUN_ID>.sh      the payload exactly as executed
   latest.log, latest.exit  symlinks to the newest run (latest.exit absent while running)
   artifacts/<RUN_ID>/      $ARTIFACTS for that run; artifacts/latest -> newest
@@ -76,10 +78,26 @@ and write everything. Earlier runs' artifacts stay readable under
    - Make it rerunnable. On later steps, replace or extend the payload; earlier
      payloads stay as `payload.<RUN_ID>.sh`.
 4. **Validate**: `bash -n run.sh`, and re-read the payload once.
-5. **Present it** to the owner using the brief below, then stop and wait.
-6. **When the owner says it ran**, run [`bash <skill-dir>/scripts/status.sh <slug>`](scripts/status.sh):
+5. **Present it** to the owner using the brief below.
+6. **Arm the completion poke**, then stop and wait. Run
+   [`watch.py`](scripts/watch.py) as a background command whose exit
+   re-invokes the session (Claude Code: Bash `run_in_background`):
+
+   ```bash
+   python3 <skill-dir>/scripts/watch.py <slug>
+   ```
+
+   It idles silently until a run of the current payload finishes, then exits
+   printing one `USER_RUN_DONE {…}` line (exit code, duration, `RESULT`
+   lines, artifact count; a short log `tail` only on failure), computed by
+   script. Act on that line; run `status.sh` or read the log only if it is
+   not enough. Re-arm after each new payload. Without background commands,
+   skip it and wait for the owner. Format, gates and limits:
+   [references/completion-poke.md](references/completion-poke.md).
+7. **When the owner says it ran** and no poke arrived, run [`bash <skill-dir>/scripts/status.sh <slug>`](scripts/status.sh):
    it reports the state, the `RESULT` lines, the artifacts and the log tail.
-   Read more of the log only if that is not enough. States:
+   Read more of the log only if that is not enough. The poke's `state` uses
+   the same names. States:
    - `done exit=N`: the payload ran; N is its exit code (130 = Ctrl-C).
    - `not-started`: `su` failed (wrong password); the payload never ran.
    - `died`: no exit code (killed, or the terminal closed mid-run).
@@ -146,7 +164,7 @@ them, keeps `run.sh` so the next cleanup retries, and carries on.
 
 ## Tests
 
-`tests/harness.sh` runs the harness end to end in a throwaway dir (direct
+`tests/harness.sh` runs the harness and `watch.py` end to end in a throwaway dir (direct
 branch only; `su --pty` needs a password). Run it after changing the
 template or scripts.
 
