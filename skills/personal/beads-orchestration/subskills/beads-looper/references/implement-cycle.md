@@ -60,7 +60,9 @@ a packet-complete one is ordinary ready work for any lane.
 
 ## Independent review, once per content
 
-Create or reuse one independent review record for the package anchor/PR. Only anchor
+Create or reuse one independent review record for the package anchor/PR, its
+description carrying the full PR URL (the reviewer's resolver refuses a bead
+without one; [coordinator Step 0](../../beads-coordinator/references/coordinator-loop.md#step-0-reconcile-changed-delivery-state)). Only anchor
 gets `external_ref=gh-pr:N`; members point to anchor, never duplicate unique refs.
 The original→review dependency is only on anchor. A reviewer gets its own
 `review/<review-id>` worktree at the published head and sends findings directly here.

@@ -315,7 +315,7 @@ class CleanupScanTests(unittest.TestCase):
                     print("ok")
                 """,
             )
-            fake_bin.add("gh", "import json\nprint(json.dumps([]))")
+            fake_bin.add("gh", "import json, sys\nprint('owner/repo' if sys.argv[1:3] == ['repo', 'view'] else json.dumps([]))")
             fake_bin.add("git", "raise SystemExit(0)")
 
             result = subprocess.run(
@@ -1905,6 +1905,7 @@ class CleanupScanTests(unittest.TestCase):
                 "tool": "bd",
                 "argv": ["-C", repo_root, "list", "--label", "pr-review-task", "--json", "--limit", "0"],
             },
+            {"tool": "gh", "argv": ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]},
             {"tool": "bd", "argv": ["show", review_id, "--json"]},
             {"tool": "bd", "argv": ["show", original_id, "--json"]},
             {"tool": "gh", "argv": ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]},
@@ -1920,9 +1921,9 @@ class CleanupScanTests(unittest.TestCase):
                     "number,url,state,isDraft,mergeStateStatus,reviewDecision,headRefName,baseRefName,mergedAt,headRefOid",
                 ],
             },
-            {"tool": "gh", "argv": ["pr", "view", "41", "--json", "number,state,mergedAt,createdAt,headRefOid"]},
+            {"tool": "gh", "argv": ["pr", "view", "41", "--repo", "owner/repo", "--json", "number,state,mergedAt,createdAt,headRefOid"]},
             {"tool": "bd", "argv": ["-C", repo_root, "config", "get", "issue_prefix", "--json"]},
-            {"tool": "gh", "argv": ["pr", "list", "--state", "open", "--json", "number,headRefName,createdAt"]},
+            {"tool": "gh", "argv": ["pr", "list", "--repo", "owner/repo", "--state", "open", "--json", "number,headRefName,createdAt"]},
             {"tool": "bd", "argv": ["-C", repo_root, "list", "--status=in_progress", "--json", "--limit", "0"]},
             {"tool": "bd", "argv": ["-C", repo_root, "kv", "list", "--json"]},
             {"tool": "bd", "argv": ["-C", repo_root, "list", "--status=blocked", "--json", "--limit", "0"]},

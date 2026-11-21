@@ -238,6 +238,18 @@ def load_original(record: dict[str, Any], repo_root: Path) -> tuple[dict[str, An
     return requested_record(payload, issue_id)
 
 
+REPO_SLUGS: dict[Path, tuple[str | None, str | None]] = {}
+
+
+def repo_slug(repo_root: Path) -> tuple[str | None, str | None]:
+    """The scanned repository's OWNER/REPO, read once per root; every PR read is scoped to it."""
+    if repo_root not in REPO_SLUGS:
+        result = run_command(["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"], repo_root)
+        slug = result.stdout.strip() if result is not None and result.returncode == 0 else ""
+        REPO_SLUGS[repo_root] = (slug, None) if re.fullmatch(r"[^/\s]+/[^/\s]+", slug) else (None, "repo-unresolved")
+    return REPO_SLUGS[repo_root]
+
+
 def resolver_error(result: subprocess.CompletedProcess[str] | None) -> str:
     if result is None:
         return "resolver-unavailable"
@@ -258,7 +270,12 @@ def resolve_review_task(
 ) -> tuple[dict[str, Any] | None, str | None]:
     if not resolver.is_file():
         return None, "resolver-unavailable"
-    result = run_command([sys.executable, str(resolver), "--issue-id", review_id], repo_root)
+    slug, error = repo_slug(repo_root)
+    if error:
+        return None, error
+    # The scan targets repo_root's repository by construction, so name it; the
+    # resolver still fails repo-mismatch if the review bead records another.
+    result = run_command([sys.executable, str(resolver), "--issue-id", review_id, "--repo", slug], repo_root)
     if result is None or result.returncode != 0:
         return None, resolver_error(result)
     try:
@@ -293,10 +310,12 @@ def view_pr(
 ) -> tuple[dict[str, Any] | None, str | None]:
     if pr_number not in cache:
         fields = "number,state,mergedAt,createdAt,headRefOid" + (",headRefName" if with_branch else "")
-        payload, error = command_json(
-            ["gh", "pr", "view", str(pr_number), "--json", fields],
-            repo_root,
-        )
+        slug, error = repo_slug(repo_root)
+        if not error:
+            payload, error = command_json(
+                ["gh", "pr", "view", str(pr_number), "--repo", slug, "--json", fields],
+                repo_root,
+            )
         if error:
             cache[pr_number] = (None, error)
         elif not isinstance(payload, dict) or not isinstance(payload.get("state"), str):
@@ -501,10 +520,12 @@ def self_heal_candidates(
         report_error(errors, "invalid-issue-prefix", "issue-prefix")
         return [], False
 
-    payload, error = command_json(
-        ["gh", "pr", "list", "--state", "open", "--json", "number,headRefName,createdAt"],
-        repo_root,
-    )
+    slug, error = repo_slug(repo_root)
+    if not error:
+        payload, error = command_json(
+            ["gh", "pr", "list", "--repo", slug, "--state", "open", "--json", "number,headRefName,createdAt"],
+            repo_root,
+        )
     if error:
         report_error(errors, error, "open-prs")
         return [], False

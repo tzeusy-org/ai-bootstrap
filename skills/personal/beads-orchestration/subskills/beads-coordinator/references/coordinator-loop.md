@@ -166,7 +166,10 @@ Canonical association is PR → anchor → members. Before creating a review bea
 dedupe by anchor/PR, retain the oldest valid parsed creation chronology; invalid
 chronology is partial manual triage. Never copy `external_ref` to members or
 review beads. Review bead has `pr-review-task,pr-review`, structured acceptance
-for independent findings/evidence/current-head readiness, and a link to anchor.
+for independent findings/evidence/current-head readiness, a link to anchor, and
+the full PR URL (`https://github.com/OWNER/REPO/pull/N`) in its description: the
+reviewer's resolver takes the repository from it and refuses a bead without one
+(`pr-repository-unrecorded`) unless dispatch passes `--repo OWNER/REPO`.
 Only anchor depends on that review bead. Mark an anchor awaiting an open PR with
 `pr-review` so the current lifecycle inventory distinguishes it from historical
 PR associations. After terminal reconciliation, remove that active lifecycle label

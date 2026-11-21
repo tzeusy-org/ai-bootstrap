@@ -172,10 +172,13 @@ CONTEXT_JSON=$(python3 "<loaded beads-pr-reviewer-worker package>/scripts/resolv
 ```
 
 The PR's repository comes from `--repo OWNER/REPO` when given, else from the PR
-URL recorded in the review bead (`repo_source` says which; `cwd` only when
-neither exists). The checkout must belong to that repository (`repo-mismatch`
-otherwise), and the PR read is scoped to it (`pr-identity-mismatch` if gh answers
-for another PR). Both are blocked, never readiness evidence.
+URL recorded in the review bead (`repo_source` says which). With neither, the
+resolver refuses (`pr-repository-unrecorded`) rather than trust the cwd; only an
+explicit `--allow-cwd-repo` accepts the checkout's repository (`repo_source:
+cwd`). A `--repo` that contradicts the recorded URL, or a checkout of another
+repository, fails `repo-mismatch`, and the PR read is scoped to the repository
+(`pr-identity-mismatch` if gh answers for another PR). All are blocked, never
+readiness evidence.
 
 ### Phase 2: Prepare The Review Snapshot
 
