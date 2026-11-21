@@ -1208,6 +1208,16 @@ class ExclusionTests(unittest.TestCase):
         self.assertEqual(payload["excluded"]["claimed"], 1)
         self.assertEqual(payload["childless_epics"], ["bd-empty"])
 
+    def test_a_lane_filed_follow_up_awaiting_shaping_is_held_from_its_author(self) -> None:
+        # aib-fn1: a lane files a standalone follow-up without a complete packet
+        # and labels it needs-shaping; neither it nor another lane may claim it.
+        follow_up = bead("bd-f", labels=["needs-shaping"])
+        ordinary = bead("bd-g")
+        payload = ranking.rank(snapshot([follow_up, ordinary], [], {}, ready=[follow_up, ordinary]),
+                               now=NOW, coordinator="coordinator:a")
+        self.assertEqual(queue_ids(payload), ["bd-g"])
+        self.assertEqual(payload["excluded"]["needs_shaping_standalone"], ["bd-f"])
+
     def test_review_beads_stay_separate_without_hiding_a_claimed_epics_children(self) -> None:
         led = epic("bd-led", labels=["team-coordination"])
         led["status"], led["assignee"] = "in_progress", "coordinator:a"
