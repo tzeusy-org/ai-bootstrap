@@ -18,6 +18,18 @@ dependent slice; missing packet content goes to bounded shaping, not silent scop
 invention. For `scope:local-state`, require the owner's explicit request and keep
 it out of ordinary isolated tracked-code delivery.
 
+An owner naming a `scope:local-state` bead satisfies the readiness gate for its
+local-state action only; it waives nothing else. The owner's request is that
+action's packet. This is the one exception to never touching the shared root
+checkout: the action may act on gitignored state in `REPO_ROOT` when it is
+reversible (move aside, never delete, never tracked files), recording what
+moved where on the bead. In a mixed bead, the local-state
+part may proceed alone while the tracked part still lacks a complete packet: split
+the tracked part into its own bead per the
+[beads-writer split rule](../../beads-writer/SKILL.md) (the local-state bead keeps
+`scope:local-state`), label that tracked bead `needs-shaping`, and close the
+local-state bead on its own evidence. Without an owner request, a `scope:local-state` bead is never claimed.
+
 One member uses native atomic claim. Multiple existing beads use the shared
 `delivery_package.py` claim command with a manifest and durable journal. Associate
 the anchor/member metadata and persist packet/session/journal locator on anchor.
@@ -29,7 +41,8 @@ current bounded work, retaining outcome affinity without claiming future backlog
 
 Create/recover one `agent/<anchor>` worktree with plain `git worktree add` from the
 actual repository ([coordinator Step 3](../../beads-coordinator/references/coordinator-loop.md#step-3-claim-publish-current-packet-and-isolate)
-shows the command; never `bd worktree create`, which edits the tracked `.gitignore`). Never move/edit the shared root checkout. Use
+shows the command; never `bd worktree create`, which edits the tracked `.gitignore`). Never move/edit the shared root checkout (sole exception: an owner-requested
+`scope:local-state` action, per Select and claim). Use
 [worker phases](../../beads-worker/SKILL.md) with `ISSUE_ID=<anchor>` and optional
 `DELIVERY_FILE`; bootstrap verifies actual cwd, Git identity and membership.
 Read the concise current packet and referenced contracts, not the archive.
