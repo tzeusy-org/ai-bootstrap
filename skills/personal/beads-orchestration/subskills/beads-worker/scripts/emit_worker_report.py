@@ -134,13 +134,15 @@ def git_recovery_facts(worktree: str, branch: str) -> dict[str, str]:
 def default_recovery(args: argparse.Namespace) -> None:
     """Fill omitted recovery fields from git, so a completed report never claims no-code-changes."""
     facts = git_recovery_facts(args.worktree_path, args.branch)
+    args.git_unpushed = facts["unpushed_commits"]
     for field in ("dirty_worktree", "unpushed_commits", "remote_branch"):
         if getattr(args, field) is None:
             setattr(args, field, facts[field])
     if args.recovery_state is None:
         local_work = "yes" in (args.dirty_worktree, args.unpushed_commits)
         if args.status == "invalid-runtime-context":
-            args.recovery_state = "no-code-changes"
+            # A worktree that fails bootstrap may still hold work; never invite its cleanup.
+            args.recovery_state = "local-only" if local_work else "no-code-changes"
         elif args.status in COMPLETED_STATUSES or (args.branch_pushed == "yes" and not local_work):
             args.recovery_state = "branch-pushed"
         elif args.dirty_worktree == "no" and args.unpushed_commits == "no":
@@ -189,6 +191,11 @@ def validate_args(args: argparse.Namespace, blockers: list[object]) -> None:
         )
     if args.status in COMPLETED_STATUSES and args.recovery_state != "branch-pushed":
         raise ValueError(f"{args.status} requires Recovery-State: branch-pushed")
+    if args.status in COMPLETED_STATUSES and "yes" in (args.git_unpushed, args.unpushed_commits):
+        # git's own answer wins over a flag: the handoff head must be on origin.
+        raise ValueError(
+            f"{args.status} requires every commit pushed: HEAD is ahead of {args.remote_branch}"
+        )
 
     if args.status == "completed-pr-opened":
         if args.handoff_path != "pr-required":
