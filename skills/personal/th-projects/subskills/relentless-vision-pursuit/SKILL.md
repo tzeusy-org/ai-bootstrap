@@ -5,7 +5,8 @@ description: >
   a project is today and the ideal its doctrine describes: lane-sequenced audits of
   every surface against the applicable quality bar, vision-grounded ideation
   lenses, synthesis into a ranked move list with tier-board movement across
-  runs, and a gated (never auto-released) work plan. Triggers: "run the vision
+  runs, and an immediately runnable work plan (no epic-level approval gate).
+  Triggers: "run the vision
   pursuit", "what's the next best step toward the vision", "relentlessly
   improve this project", "audit the whole project against the ideal",
   "generate the next round of improvements".
@@ -123,17 +124,21 @@ discipline §3). Produce:
 
 ## Phase 4 — Deliverables
 
-Dossier + data JSON, gated beads epic, the owner dossier questionnaire, and a
-memory line — formats and the gate protocol in
+Dossier + data JSON, beads epic, the owner dossier questionnaire, and a
+memory line — formats and the hold rules in
 [`references/pursuit-deliverables.md`](references/pursuit-deliverables.md).
-A pursuit run is *planning, never execution*: nothing it files may be
-runnable until the owner releases the gate.
+The epic and its mandate-grounded move beads are runnable immediately:
+no epic-level `[HOLD]` gate and no owner sign-off to start. Only a
+vision-extending move that needs a doctrine amendment, or a move that
+changes an external consumer contract, is held — that single bead alone
+— until its own decision is answered. This skill still never executes
+moves itself; the fleet does.
 
 ## Phase 5 — Owner dossier questionnaire (closeout)
 
 The run ends by handing the owner its hard gates as one
 [`../user-questionnaire/SKILL.md`](../user-questionnaire/SKILL.md) packet,
-published as a web form: gate-release scope, each vision-extending move's
+published as a web form: each vision-extending move's
 doctrine amendment, any external-contract waiver, and nothing else. Items
 are drafted, adversarially reviewed by a fresh subagent, validated, and
 served by script; the final report ends with the printed `QUESTIONNAIRE_URL=`
@@ -156,10 +161,10 @@ cadence/resume hygiene. Violating one is a defect in the run, not a style choice
   `../project-feature-request/SKILL.md` funnel as fuzzy input;
   vision-extending moves enter knowing Gate 2 requires doctrine amendment
   or rejection.
-- **Gate release** → the owner's move, recorded through the closeout
-  questionnaire; the applying session closes the gate only on an `Agreed`
-  release answer with `apply_now`. Execution belongs to
-  `/beads-orchestration` (beads-coordinator), never to this skill.
+- **Execution** → ungated moves go straight to `/beads-orchestration`
+  (beads-coordinator); never executed by this skill. A held move
+  (amendment/contract) is released only by an `Agreed` answer with
+  `apply_now` through the closeout questionnaire.
 - **Owner answers** → the next session runs `questionnaire_web.py ingest`
   before anything else and routes per the user-questionnaire apply checklist.
 - **Next run** verifies this run's shipped moves via a scoped

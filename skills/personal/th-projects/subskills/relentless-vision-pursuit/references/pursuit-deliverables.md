@@ -1,4 +1,4 @@
-# Pursuit Deliverables: Dossier, Gated Epic, Memory
+# Pursuit Deliverables: Dossier, Epic, Memory
 
 ## Dossier
 
@@ -41,17 +41,17 @@ verification pass confirmed (Phase 0 step 5); movement inferred from source
 reading alone is labeled [Inferred]. First run: tiers only, no movement
 column.
 
-## Gated epic (planning, never execution)
+## Epic (runnable on creation)
 
-A pursuit run files work but must not make it runnable — in repos where an
-autonomous fleet picks up ready beads, the gate is the only thing between a
-pursuit run and an unsanctioned fleet launch.
+No epic-level gate: the owner does not sign off before the fleet may start.
+The epic and every mandate-grounded move are ready as soon as they are filed.
 
-1. Create a `[HOLD]` gate bead first, **assigned to the owner**.
-2. Create the epic + one child bead per move; every child depends on the
-   gate so all are blocked. bd rejects a task blocking an epic ("epics can
-   only block other epics") — so also **assign the epic itself to the
-   owner** to keep it off `bd ready`.
+1. Create the epic + one child bead per move, unassigned, so they appear in
+   `bd ready`.
+2. Hold only moves with a real hard gate: a vision-extending move needs its
+   doctrine amendment, and a contract-changing move needs its waiver. For
+   each, create a `[HOLD]` decision bead **assigned to the owner** and make
+   only that move's child depend on it. Never hold the epic or its siblings.
 3. Every bead description cites its evidence and points at the dossier
    JSON by pinned commit (`<sha>:<path>`), so retention pruning never breaks
    the pointer.
@@ -59,8 +59,8 @@ pursuit run and an unsanctioned fleet launch.
    use `--dolt-auto-commit batch` and one `bd dolt commit` at the end.
    **Never** `bd create --graph` (its `--dry-run` actually creates beads
    and drops deps); add edges with `bd dep add`.
-5. Release is the owner's move: closing the gate un-blocks the children.
-   State this explicitly in the final report.
+5. State in the final report which moves are runnable now and which single
+   moves are held, and on what decision.
 
 No bd in the repo → the ranked move list stays in the dossier and the run
 stops there; do not improvise a tracker.
@@ -77,7 +77,6 @@ recommendation:
 
 | Gate | Item shape | Decision ID |
 |---|---|---|
-| Gate release scope | Release the whole epic / the top-N moves named / hold the gate | `pursuit-<date>-release` |
 | Doctrine amendment behind a vision-extending move | Adopt the amendment as drafted / adopt with edit / reject (move drops) / defer | `pursuit-<date>-amend-<move-key>` |
 | External consumer contract a move would change | Waive with migration plan / keep the contract (move narrows) / defer | `pursuit-<date>-contract-<move-key>` |
 | Anything Phase 3 classified as a hard human gate | Per decision-autonomy.md | `pursuit-<date>-<key>` |
@@ -98,15 +97,15 @@ uv run "$Q/questionnaire_web.py" serve "$PACKET"      # last line: QUESTIONNAIRE
 
 The final report ends with that `QUESTIONNAIRE_URL=` line. The next session
 (or the apply session) starts with `questionnaire_web.py ingest "$PACKET"`:
-an `Agreed` release item with `apply_now: true` lets the applying agent close
-the gate bead, citing the decision record in the close reason; adopted
+an `Agreed` item with `apply_now: true` lets the applying agent close that
+move's hold bead, citing the decision record in the close reason; adopted
 amendments route to `../../project-shape/`; a rejected amendment removes its
-move from the epic; `Held` items keep the gate closed and note the re-ask
-trigger on the gate bead.
+move from the epic; `Held` items keep that one hold open and note the re-ask
+trigger on it.
 
 ## Memory
 
 Write or update one durable memory (`bd remember` where available,
-otherwise a `reference` memory) holding the dossier path, epic id, gate id,
+otherwise a `reference` memory) holding the dossier path, epic id, hold-bead ids,
 questionnaire packet path and URL, and artifact URL if one was published;
 link the prior pursuit's memory so runs form a chain.

@@ -22,7 +22,7 @@ Do not use when:
 - Exhaustive spec↔code reconciliation, or "does code match spec?" before any drift is confirmed → `../spec-concretization/SKILL.md`.
 - Backlog mechanics only, no direction analysis → `/beads-orchestration` (beads-writer).
 - Recurring orchestrated pursuit loop (lane-sequenced surface audits + ideation at
-  scale + gated work plan) → `../relentless-vision-pursuit/SKILL.md`;
+  scale + ungated work plan) → `../relentless-vision-pursuit/SKILL.md`;
   ideation here is the inline single-brief mode it builds on.
 
 ## Core Rules
