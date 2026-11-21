@@ -257,6 +257,21 @@ authority or risk boundary remains explicit; it is never hidden by bundling.
 If the packet is missing a material decision or source assumption, return that
 specific gap to shaping. Do not fan out a fresh research hierarchy for every task.
 
+Packet slots live in fixed fields, so every lane rules the same way:
+
+| Slot | Field | Not relevant when |
+|---|---|---|
+| Outcome, exclusions, governing request or repro | `description` | never |
+| Member acceptance | `acceptance_criteria` (a checklist only in `description` does not count) | never |
+| New decisions, references, trust/failure seams, doc impact, verification | `design`, or a `## Scope` / `## Steps to reproduce` heading or a `Scope:` line in `description` | the bead is a `bug`, `task` or `chore` under existing contracts (its `description` names the surface); a seam the change does not touch is omitted |
+| Shaping done | no `needs-shaping` label | never |
+
+[`check_packet.py`](../scripts/check_packet.py) (`uv run scripts/check_packet.py
+--repo-root "$REPO_ROOT" [ID ...]`, default: the whole `bd ready` queue) reports
+`packet_complete` and the missing slots per bead. It checks structure only: a
+complete packet can still lack source grounding or authority, which stays this
+step's judgment.
+
 Read `references/epic-coordination.md` only for programme allocation or shared
 prerequisites. No Team Lead/subworker mini-coordinator tier is required.
 

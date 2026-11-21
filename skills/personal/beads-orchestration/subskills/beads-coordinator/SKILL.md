@@ -51,6 +51,8 @@ locators. Require worker bootstrap proof before editing. Never commit Dolt-manag
   prerequisites and review-first admission. Pass the Step 0 normalization file;
   `queue` is executable order, `candidates` diagnostic only. Missing review evidence
   dispatches nothing; parked owners keep claims without consuming execution slots.
+- [check_packet.py](scripts/check_packet.py) reports per bead whether the packet
+  slots of Step 2 are filled (structure only, never semantic readiness).
 - [coordinator_registry.py](scripts/coordinator_registry.py) is the registry writer
   and shared liveness reader; do not hand-write registry expiries.
 - [normalize_pr_review_state.py](scripts/normalize_pr_review_state.py) reports
