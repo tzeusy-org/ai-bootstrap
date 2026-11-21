@@ -580,14 +580,27 @@ sys.exit(1)
         self.assertEqual(json.loads(ok.stdout)["repo_source"], "argument")
         self.assertEqual(json.loads(wrong.stderr)["error_code"], "repo-mismatch")
 
-    def test_unrecorded_repository_falls_back_to_checkout(self) -> None:
+    def test_unrecorded_repository_is_refused_without_explicit_cwd_opt_in(self) -> None:
         with FakeBinDir() as fbd:
             self._make_bins(fbd, description="Original implementation bead: aib-abc")
-            result = run_script("resolve_review_context.py", ["--issue-id", "aib-xyz"], env=fbd.env())
-        self.assertEqual(result.returncode, 0, result.stderr)
-        payload = json.loads(result.stdout)
+            refused = run_script("resolve_review_context.py", ["--issue-id", "aib-xyz"], env=fbd.env())
+            allowed = run_script("resolve_review_context.py", ["--issue-id", "aib-xyz", "--allow-cwd-repo"],
+                                 env=fbd.env())
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertEqual(json.loads(refused.stderr)["error_code"], "pr-repository-unrecorded")
+        self.assertEqual(refused.stdout, "")
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+        payload = json.loads(allowed.stdout)
         self.assertEqual(payload["repo_source"], "cwd")
         self.assertEqual(payload["owner_repo"], "owner/repo")
+
+    def test_repo_argument_conflicting_with_recorded_url_fails(self) -> None:
+        with FakeBinDir() as fbd:
+            self._make_bins(fbd)  # records https://github.com/owner/repo/pull/99
+            result = run_script("resolve_review_context.py", ["--issue-id", "aib-xyz", "--repo", "fork/repo"],
+                                env=fbd.env())
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(json.loads(result.stderr)["error_code"], "repo-mismatch")
 
     def test_ambiguous_recorded_repository_fails(self) -> None:
         with FakeBinDir() as fbd:
@@ -813,7 +826,7 @@ sys.exit(1)
                 current_anchor = {**anchor, "metadata": {"delivery": current_delivery}}
                 payloads = {original_id: [current_anchor], member["id"]: [] if name == "missing-member" else [current_member]}
                 self._make_bins(fbd, description=description, original_id=original_id, pr_number=5644, show_payloads=payloads, **{"head_branch": accepted, **options})
-                result = run_script("resolve_review_context.py", ["--issue-id", "aib-xyz"], env=fbd.env())
+                result = run_script("resolve_review_context.py", ["--issue-id", "aib-xyz", "--repo", "owner/repo"], env=fbd.env())
                 self.assertEqual(result.returncode, expected_exit, result.stdout + result.stderr)
                 if error:
                     self.assertEqual(json.loads(result.stderr)["error_code"], error)
@@ -893,7 +906,7 @@ sys.exit(1)
                 pr_number=1214,
             )
             result = run_script("resolve_review_context.py",
-                                ["--issue-id", "aib-xyz"],
+                                ["--issue-id", "aib-xyz", "--repo", "owner/repo"],
                                 env=fbd.env())
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)

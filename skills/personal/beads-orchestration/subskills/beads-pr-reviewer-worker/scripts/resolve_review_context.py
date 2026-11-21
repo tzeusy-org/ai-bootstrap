@@ -163,6 +163,8 @@ def verify_pr_identity(pr, owner_repo, pr_number):
 def main():
     parser = argparse.ArgumentParser(description="Resolve original bead and PR context for a pr-review-task bead.")
     parser.add_argument("--issue-id", required=True, help="Review bead id, for example bd-123")
+    parser.add_argument("--allow-cwd-repo", action="store_true",
+                        help="Accept the cwd checkout's repository when neither --repo nor a recorded PR URL names one.")
     parser.add_argument("--repo", dest="repo_slug", default="",
                         help="Requested OWNER/REPO; overrides the PR URL recorded in the review bead")
     args = parser.parse_args()
@@ -277,8 +279,17 @@ def main():
         # in the review bead; the cwd checkout must agree with it, so a wrong
         # checkout with a colliding PR number fails instead of answering.
         cwd_repo = run(["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]).strip()
-        requested = args.repo_slug or recorded_repo(review_description, pr_number)
+        recorded = recorded_repo(review_description, pr_number)
+        if args.repo_slug and recorded and args.repo_slug.lower() != recorded.lower():
+            fail("repo-mismatch", f"--repo is {args.repo_slug!r}, but the review bead records {recorded!r}",
+                 owner_repo=args.repo_slug, recorded_repo=recorded)
+        requested = args.repo_slug or recorded
         repo_source = "argument" if args.repo_slug else ("review-bead" if requested else "cwd")
+        if not requested and not args.allow_cwd_repo:
+            fail("pr-repository-unrecorded",
+                 "the review bead records no PR URL and no --repo was given; record the full PR URL "
+                 "in the review bead or pass --repo OWNER/REPO (--allow-cwd-repo accepts the checkout)",
+                 cwd_repo=cwd_repo)
         owner_repo = requested or cwd_repo
         if not re.fullmatch(r"[^/\s]+/[^/\s]+", owner_repo):
             fail("repo-unresolved", "unable to resolve the PR repository", owner_repo=owner_repo)

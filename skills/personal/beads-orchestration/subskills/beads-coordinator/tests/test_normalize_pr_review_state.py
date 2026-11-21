@@ -156,6 +156,10 @@ def install_fakes(fake_bin: FakeBinDir) -> None:
 
         argv = sys.argv[1:]
         if argv[:2] == ["repo", "view"]:
+            failure = fixture.get("failures", {}).get("gh-repo-view")
+            if failure:
+                print(failure, file=sys.stderr)
+                raise SystemExit(1)
             print("owner/repo")
             raise SystemExit(0)
         if argv[:2] == ["pr", "list"]:
@@ -328,7 +332,8 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                 "gh",
                 """
                 import json
-                print(json.dumps([]))
+                import sys
+                print("owner/repo" if sys.argv[1:3] == ["repo", "view"] else json.dumps([]))
                 """,
             )
             fake_bin.add("git", "raise SystemExit(0)")
@@ -352,6 +357,26 @@ class NormalizePrReviewStateTests(unittest.TestCase):
             },
         )
         self.assertEqual(result.stderr, "")
+
+    def test_unresolved_repository_scopes_no_pr_read_and_is_partial(self) -> None:
+        # aib-3qa: every PR read is scoped to the scanned repo; without it none runs.
+        original_id = "aib-swr.1"
+        result, calls, _ = self.run_fixture(
+            {
+                "blocked_pr_review": [{"id": original_id, "labels": ["pr-review"], "status": "blocked"}],
+                "blocked_pr_review_tasks": [],
+                "shows": {original_id: [original_bead(original_id, 41)]},
+                "prs": {"41": pr_payload("OPEN")},
+                "open_prs": [],
+                "failures": {"gh-repo-view": "not a git repository"},
+            }
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "partial")
+        self.assertTrue(any(error["code"] == "repo-unresolved" for error in payload["errors"]))
+        pr_reads = [call for call in calls if call["tool"] == "gh" and call["argv"][0] == "pr"]
+        self.assertEqual(pr_reads, [])
 
     def test_fake_commands_match_strict_read_only_argv_allowlists(self) -> None:
         original_id = "aib-swr.1"
@@ -399,9 +424,10 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                 ("show", self_heal_id, "--json"),
             },
             "gh": {
-                ("pr", "list", "--state", "open", "--json", "number,headRefName,createdAt"),
-                ("pr", "view", "41", "--json", "number,state,mergedAt,createdAt,headRefOid"),
-                ("pr", "view", "42", "--json", "number,state,mergedAt,createdAt,headRefOid,headRefName"),
+                ("repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"),
+                ("pr", "list", "--repo", "owner/repo", "--state", "open", "--json", "number,headRefName,createdAt"),
+                ("pr", "view", "41", "--repo", "owner/repo", "--json", "number,state,mergedAt,createdAt,headRefOid"),
+                ("pr", "view", "42", "--repo", "owner/repo", "--json", "number,state,mergedAt,createdAt,headRefOid,headRefName"),
             },
             "git": set(),
         }
