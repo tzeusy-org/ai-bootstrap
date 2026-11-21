@@ -12,6 +12,38 @@ hand-formatting it.
 
 Do not invent synonyms such as `done`, `blocked`, or `needs-review`.
 
+## Route → Flags
+
+Each Phase 5 route maps to exactly one `--status` / `--handoff-path` pair
+(the "PR path" in SKILL.md is `pr-required`; there is no `pr` value):
+
+| Phase 5 route | `--status` | `--handoff-path` | `--branch-pushed` |
+|---|---|---|---|
+| PR path (default; unknown policy) | `completed-pr-opened` | `pr-required` | `yes` |
+| Direct-merge candidate | `completed-direct-merge-candidate` | `direct-merge-candidate` | `yes` |
+| Blocked (external/hard gate) | `blocked-awaiting-coordinator` | `blocked-awaiting-coordinator` | as observed |
+| Bootstrap failed | `invalid-runtime-context` | `invalid-runtime-context` | `no` |
+
+## Quality Gates
+
+Pass `--quality-gate lint|typecheck|tests=<result>` with one of:
+
+- `pass` / `fail` — the gate ran with that result.
+- `not-applicable` — the repo defines no such gate (no linter, no typecheck
+  for a shell or prose repo).
+- `not-run` — the repo defines the gate but it did not run; this reads as
+  skipped and needs a reason in `--summary`. An omitted gate defaults to it.
+
+## Recovery Fields
+
+Omit `--recovery-state`, `--dirty-worktree`, `--unpushed-commits` and
+`--remote-branch` unless you know better: the emitter reads them from git in
+`--worktree-path` (status, upstream, commits ahead of upstream; `unknown`/`n/a`
+when git cannot say). `Recovery-State` then defaults to `branch-pushed` when
+the branch is pushed, `no-code-changes` for a bootstrap failure or a clean
+worktree with nothing unpushed, else `local-only`. A completed report requires
+`branch-pushed`, so it never claims `no-code-changes`.
+
 ## Standard Usage
 
 ```bash
@@ -56,12 +88,8 @@ For blockers add:
   --status blocked-awaiting-coordinator \
   --handoff-path blocked-awaiting-coordinator \
   --branch-pushed no \
-  --recovery-state local-only \
   --resume-condition "Exact event required before work can resume" \
   --failing-command "Exact command that failed" \
-  --remote-branch "origin/agent/${ISSUE_ID}" \
-  --dirty-worktree yes|no|unknown \
-  --unpushed-commits yes|no|unknown \
   --blockers-json '[{"title":"Concrete blocker title","type":"task","priority":1,"depends_on":"bd-42","rationale":"What is blocked and why","unblock_condition":"What must happen before work can resume"}]'
 ```
 
