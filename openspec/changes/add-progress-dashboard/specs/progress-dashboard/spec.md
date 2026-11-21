@@ -72,7 +72,7 @@ Scope: v1-mandatory
 
 ### Requirement: Honest Incremental Usage and Agent Overview
 
-The dashboard MUST summarize parent and child-agent observations with source freshness, MUST collect supported attached usage logs incrementally, MUST resolve known Codex children through a read-only parent-scoped runtime relationship index when configured, and MUST distinguish measured, partial, unknown and errored counters without fabricating estimates or double-counting cached input or inherited fork history.
+The dashboard MUST summarize parent and child-agent observations with source freshness, MUST collect supported attached usage logs incrementally, MUST resolve known Codex children through a read-only parent-scoped runtime relationship index and known Claude Code sub-agents through the configured session's own sub-agent folder when configured, and MUST distinguish measured, partial, unknown and errored counters without fabricating estimates or double-counting cached input or inherited fork history.
 
 ID: REQ-progress-dashboard-004
 Source: owner refinement 2026-11-14 progress, tokens and subagents in one visual layer
@@ -92,6 +92,11 @@ Scope: v1-mandatory
 
 - **WHEN** the runtime index links a published agent to the configured parent session
 - **THEN** background metadata lookup resolves its log and runtime identity without per-child manual attachment, transcript-directory crawling, unrelated-session reads or model calls, and thread-filtered runtime counters supersede legacy cumulative events
+
+#### Scenario: A configured Claude Code parent launches known sub-agents
+
+- **WHEN** the configured parent session's own sub-agent folder holds a log whose agent id, tool-use id or unique description matches a published agent
+- **THEN** background lookup attributes that log without per-child manual attachment, reads only that session's sub-agent folder and its descriptors (never other sessions or projects), leaves unmatched or ambiguous sub-agents unattributed, and keeps explicit attachments authoritative
 
 #### Scenario: The owner inspects an agent's work
 
