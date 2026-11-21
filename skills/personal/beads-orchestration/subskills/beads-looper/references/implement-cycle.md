@@ -54,9 +54,13 @@ without gratuitous note traffic. Publish useful commits and current recovery sta
 File discovered follow-ups as holder with the per-class dependency wiring in
 [coordinator Step 6](../../beads-coordinator/references/coordinator-loop.md#step-6-land-or-wait-with-explicit-state):
 only a prerequisite blocker blocks this outcome; new behavior links `discovered-from`.
-A follow-up without a complete packet gets `needs-shaping`, so the ranker holds it
-for beads-writer rather than this or another lane claiming it on the next wake;
-a packet-complete one is ordinary ready work for any lane.
+Check each new follow-up with
+[`check_packet.py`](../../beads-coordinator/scripts/check_packet.py)
+`--repo-root "$REPO_ROOT" <new-id>`; without `packet_complete` it gets
+`needs-shaping`, so the ranker holds it for beads-writer rather than this or
+another lane claiming it on the next wake; a packet-complete one is ordinary
+ready work for any lane. A shaping-held prerequisite blocker is handled as in
+Step 6: shape it now, or report the hold on this outcome.
 
 ## Independent review, once per content
 

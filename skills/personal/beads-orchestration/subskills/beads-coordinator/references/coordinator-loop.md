@@ -381,8 +381,12 @@ the shared queue only with a complete packet: run
 reports `packet_complete`, add `needs-shaping` so the ranker holds it for
 [beads-writer](../../beads-writer/SKILL.md) instead of the next lane claiming
 it. A packet-complete follow-up is ordinary ready work for any lane, its author
-included; independence comes from review, not from who implements. Only a
-prerequisite blocker serializes the original:
+included; independence comes from review, not from who implements. A
+prerequisite blocker that needs shaping parks the original until beads-writer
+shapes it, so never leave that silent: when the filer holds the context, shape
+it now (complete the packet per beads-writer, drop `needs-shaping`); otherwise
+record the hold on the original's notes (`waiting on shaping of <new-id>`) and
+name it in the report. Only a prerequisite blocker serializes the original:
 
 ```bash
 bd --actor "$COORDINATOR_ID" dep add <original-id> <new-id>                       # prerequisite blocker
