@@ -14,10 +14,10 @@ Do not invent synonyms such as `done`, `blocked`, or `needs-review`.
 
 ## Route → Flags
 
-Each Phase 5 route maps to exactly one `--status` / `--handoff-path` pair
-(the "PR path" in SKILL.md is `pr-required`; there is no `pr` value):
+Each publish-and-handoff route maps to exactly one `--status` / `--handoff-path`
+pair (the "PR path" in SKILL.md is `pr-required`; there is no `pr` value):
 
-| Phase 5 route | `--status` | `--handoff-path` | `--branch-pushed` |
+| Route | `--status` | `--handoff-path` | `--branch-pushed` |
 |---|---|---|---|
 | PR path (default; unknown policy) | `completed-pr-opened` | `pr-required` | `yes` |
 | Direct-merge candidate | `completed-direct-merge-candidate` | `direct-merge-candidate` | `yes` |
@@ -38,10 +38,12 @@ Pass `--quality-gate lint|typecheck|tests=<result>` with one of:
 
 Omit `--recovery-state`, `--dirty-worktree`, `--unpushed-commits` and
 `--remote-branch` unless you know better: the emitter reads them from git in
-`--worktree-path` (status, upstream, commits ahead of upstream; `unknown`/`n/a`
-when git cannot say). `Recovery-State` then defaults to `branch-pushed` when
-the branch is pushed, `no-code-changes` for a bootstrap failure or a clean
-worktree with nothing unpushed, else `local-only`. A completed report requires
+`--worktree-path`: status, and commits ahead of `origin/<reported branch>`
+(never `@{u}`, which is `origin/main` for a worktree made from it), with
+`unknown`/`n/a` when git cannot say. `Recovery-State` then defaults to
+`branch-pushed` for a completed report or a pushed branch with no local work,
+`no-code-changes` for a bootstrap failure or a clean worktree with nothing
+unpushed, else `local-only`. A completed report requires
 `branch-pushed`, so it never claims `no-code-changes`.
 
 ## Standard Usage

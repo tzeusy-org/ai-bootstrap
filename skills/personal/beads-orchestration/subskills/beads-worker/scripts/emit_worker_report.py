@@ -114,28 +114,34 @@ def git(worktree: str, *argv: str) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
-def git_recovery_facts(worktree: str) -> dict[str, str]:
-    """Read dirty/unpushed/upstream from the worktree; unknown when git can't say."""
+def git_recovery_facts(worktree: str, branch: str) -> dict[str, str]:
+    """Read dirty/unpushed/remote from the worktree; unknown when git can't say.
+
+    Compares against origin/<branch>, never @{u}: a worktree made with
+    `git worktree add -b agent/<id> <path> origin/main` tracks origin/main.
+    """
     status = git(worktree, "status", "--porcelain")
-    upstream = git(worktree, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}") if status is not None else None
-    ahead = git(worktree, "rev-list", "--count", "@{u}..HEAD") if upstream else None
+    remote = f"origin/{branch}"
+    exists = status is not None and git(worktree, "rev-parse", "--verify", "--quiet", f"refs/remotes/{remote}") is not None
+    ahead = git(worktree, "rev-list", "--count", f"refs/remotes/{remote}..HEAD") if exists else None
     return {
         "dirty_worktree": "unknown" if status is None else ("yes" if status else "no"),
         "unpushed_commits": "unknown" if ahead is None or not ahead.isdigit() else ("yes" if int(ahead) else "no"),
-        "remote_branch": upstream or "n/a",
+        "remote_branch": remote if exists else "n/a",
     }
 
 
 def default_recovery(args: argparse.Namespace) -> None:
     """Fill omitted recovery fields from git, so a completed report never claims no-code-changes."""
-    facts = git_recovery_facts(args.worktree_path)
+    facts = git_recovery_facts(args.worktree_path, args.branch)
     for field in ("dirty_worktree", "unpushed_commits", "remote_branch"):
         if getattr(args, field) is None:
             setattr(args, field, facts[field])
     if args.recovery_state is None:
+        local_work = "yes" in (args.dirty_worktree, args.unpushed_commits)
         if args.status == "invalid-runtime-context":
             args.recovery_state = "no-code-changes"
-        elif args.branch_pushed == "yes":
+        elif args.status in COMPLETED_STATUSES or (args.branch_pushed == "yes" and not local_work):
             args.recovery_state = "branch-pushed"
         elif args.dirty_worktree == "no" and args.unpushed_commits == "no":
             args.recovery_state = "no-code-changes"
@@ -176,6 +182,7 @@ def validate_args(args: argparse.Namespace, blockers: list[object]) -> None:
     if args.branch != expected_branch and args.status != "invalid-runtime-context":
         raise ValueError("Branch must match the accepted delivery branch")
 
+    default_recovery(args)
     if args.recovery_state not in VALID_RECOVERY_STATES:
         raise ValueError(
             f"Recovery-State must be one of: {', '.join(sorted(VALID_RECOVERY_STATES))}"
@@ -226,7 +233,6 @@ def main() -> int:
         gates = parse_quality_gates(args.quality_gate)
         follow_ups = parse_json_array(args.discovered_follow_ups_json, "Discovered-Follow-Ups-JSON")
         blockers = parse_json_array(args.blockers_json, "Blockers-JSON")
-        default_recovery(args)
         validate_args(args, blockers)
     except (OSError, ValueError) as exc:
         return fail(str(exc))

@@ -481,14 +481,20 @@ class WorkerReportVocabularyTests(unittest.TestCase):
                             "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"})
 
     def make_worktree(self, tmp: Path) -> Path:
-        remote, work = tmp / "remote.git", tmp / "work"
-        subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
-        subprocess.run(["git", "init", "-q", "-b", "agent/bd-42", str(work)], check=True)
+        """The documented flow: worktree from origin/main, push without -u, so @{u} is origin/main."""
+        remote, root, work = tmp / "remote.git", tmp / "root", tmp / "work"
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(remote)], check=True)
+        subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
+        (root / "f").write_text("0\n")
+        self.git(root, "add", "f")
+        self.git(root, "commit", "-q", "-m", "base")
+        self.git(root, "remote", "add", "origin", str(remote))
+        self.git(root, "push", "-q", "origin", "main")
+        self.git(root, "fetch", "-q", "origin")
+        self.git(root, "worktree", "add", "-q", "-b", "agent/bd-42", str(work), "origin/main")
         (work / "f").write_text("1\n")
-        self.git(work, "add", "f")
-        self.git(work, "commit", "-q", "-m", "one")
-        self.git(work, "remote", "add", "origin", str(remote))
-        self.git(work, "push", "-q", "-u", "origin", "agent/bd-42")
+        self.git(work, "commit", "-q", "-am", "one")
+        self.git(work, "push", "-q", "origin", "agent/bd-42")
         return work
 
     def emit(self, worktree: Path | str, *extra: str) -> subprocess.CompletedProcess[str]:
@@ -544,6 +550,25 @@ class WorkerReportVocabularyTests(unittest.TestCase):
             self.assertEqual(report_field(result.stdout, "Recovery-State"), "local-only")
             self.assertEqual(report_field(result.stdout, "Dirty-Worktree"), "yes")
             self.assertEqual(report_field(result.stdout, "Unpushed-Commits"), "yes")
+
+    def test_pushed_branch_with_local_work_is_local_only_when_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work = self.make_worktree(Path(tmp))
+            (work / "g").write_text("dirty\n")
+            result = self.emit(work, *self.BLOCKED, "--branch-pushed", "yes")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(report_field(result.stdout, "Recovery-State"), "local-only")
+            self.assertEqual(report_field(result.stdout, "Remote-Branch"), "origin/agent/bd-42")
+
+    def test_unpushed_branch_reports_no_remote(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work = self.make_worktree(Path(tmp))
+            self.git(work, "push", "-q", "origin", "--delete", "agent/bd-42")
+            result = self.emit(work, *self.BLOCKED, "--branch-pushed", "no")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(report_field(result.stdout, "Remote-Branch"), "n/a")
+            self.assertEqual(report_field(result.stdout, "Unpushed-Commits"), "unknown")
+            self.assertEqual(report_field(result.stdout, "Recovery-State"), "local-only")
 
     def test_unreadable_git_state_reports_unknown_not_clean(self) -> None:
         result = self.emit("/nonexistent", *self.BLOCKED, "--branch-pushed", "no")
