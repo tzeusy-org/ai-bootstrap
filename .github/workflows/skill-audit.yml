@@ -49,6 +49,13 @@ jobs:
           uv run skills/personal/beads-orchestration/subskills/beads-worker/tests/test_worker_helpers.py
           uv run skills/personal/beads-orchestration/subskills/beads-worker/tests/test_skill_package.py
           uv run skills/personal/beads-orchestration/subskills/beads-looper/tests/test_skill_package.py
+      - name: Validate th-projects and run pytest skill suites
+        # validate-th-projects.sh rotted unnoticed while it ran nowhere (aib-78w).
+        run: |
+          bash skills/personal/th-projects/scripts/validate-th-projects.sh
+          uv run --with pytest pytest -q \
+            skills/personal/th-projects/subskills/spec-concretization/tests \
+            skills/personal/th-engineering/subskills/greenfield-parity/tests
       - name: Audit personal skill packages
         # --strict: skills/personal is warning-free as of dotfiles-hyd; keep it that way.
         run: >
