@@ -99,8 +99,13 @@ lane's memory. A kill or a compaction loses at most the unit in flight.
 - Resume: re-dispatch a lost lane cold with the ledger, the bar, and its
   `next_unit` from the state file. Never re-run finished units.
 - Keep the state file current so wakeups survive context summarization.
-- Re-run soon after a release → expect fewer NEW findings; that is success.
-  Report movement, don't pad.
+- Re-run soon after a release → expect fewer NEW findings. That is success
+  only when the claim scorecard moved; report claim and tier movement, don't
+  pad, and don't read a short list as a closed gap.
+- The in-use audit runs inline in the orchestrator before the lanes start.
+  Bound it: one real input, one null-alternative run, and a stated budget.
+  The closure-gate agent is a one-shot fresh session on the session's model
+  and counts toward the ceiling of 3.
 - If a fleet is mid-execution on a prior pursuit epic: audit the surfaces
   it has already landed (to measure) and ideate the lenses it is not
   touching; note the overlap in the report instead of filing colliding
