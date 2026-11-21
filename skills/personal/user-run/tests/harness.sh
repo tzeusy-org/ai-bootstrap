@@ -104,4 +104,51 @@ find $b/t4 -exec touch -h -d '10 days ago' {} +
 out=$("$SK/cleanup.sh" --quiet 2>&1); echo "$out" | grep -q 'failed to remove' && [ -f $b/t4/run.sh ] && pass cleanup-partial-reported-marker-kept || { fail cleanup-partial; echo "$out"; }
 chmod 0755 $b/t4/artifacts/20200101000000/ro; "$SK/cleanup.sh" --quiet; [ ! -e $b/t4 ] && pass cleanup-retry || fail cleanup-retry
 
+# ---- completion poke (watch.py)
+W="python3 $SK/watch.py"; r=$("$SK/scaffold.sh" t6); d=$b/t6
+jq_() { python3 -c 'import sys,json;l=sys.stdin.read().split(" ",1);o=json.loads(l[1]);print(eval(sys.argv[1]))' "$1"; }
+setp "$r" 'echo hi; echo "RESULT tag=v1"; echo a > "$ARTIFACTS/a.txt"'
+$W t6 --timeout 20 --interval 0.2 > "$S/w1.out" & wp=$!; sleep 0.5
+bash "$r" >/dev/null 2>&1; wait $wp; wrc=$?
+line=$(cat "$S/w1.out")
+[ "$wrc" = 0 ] && [ "$(echo "$line" | wc -l)" = 1 ] && [[ "$line" == "USER_RUN_DONE {"* ]] && pass watch-success-one-line || { fail "watch-success-one-line rc=$wrc"; echo "$line"; }
+[ "$(echo "$line" | jq_ '(o["state"],o["exit"],o["artifacts"],o["result"],"tail" in o)')" = "('done', 0, 1, ['tag=v1'], False)" ] && pass watch-success-fields || { fail watch-success-fields; echo "$line"; }
+id=$(basename "$(readlink $d/latest.log)" .log)
+python3 -c 'import json,sys;o=json.load(open(sys.argv[1]));assert o["exit"]==0 and o["started"] is True and o["artifacts"]==1 and o["secs"]>=0' "$d/$id.done.json" && [ ! -e "$d/.$id.done.tmp" ] && pass done-json || fail done-json
+$W t6 --timeout 1 --interval 0.2 > "$S/w2.out"; wrc=$?
+[ "$wrc" = 3 ] && grep -q '^USER_RUN_WAITING ' "$S/w2.out" && pass watch-no-redeliver-timeout || { fail "watch-no-redeliver-timeout rc=$wrc"; cat "$S/w2.out"; }
+
+setp "$r" 'for i in $(seq 40); do printf "noise %s %0200d\n" $i 0; done; echo "error: boom" >&2; false'
+$W t6 --timeout 20 --interval 0.2 > "$S/w3.out" & wp=$!; sleep 0.5
+bash "$r" >/dev/null 2>&1; wait $wp
+line=$(cat "$S/w3.out")
+[ "$(echo "$line" | jq_ '(o["exit"],o["tail"][-1],len(o["tail"])<=10,len("\n".join(o["tail"]).encode())<=1500)')" = "(1, 'error: boom', True, True)" ] && pass watch-failure-tail-bounded || { fail watch-failure-tail-bounded; echo "$line"; }
+[ ${#line} -lt 2200 ] && pass watch-failure-line-small || fail "watch-failure-line-small ${#line}"
+
+# A run older than the current payload is not delivered; --latest delivers it anyway.
+setp "$r" 'echo stale'; bash "$r" >/dev/null 2>&1; sleep 1.1; setp "$r" 'echo new payload'
+$W t6 --timeout 1 --interval 0.2 >/dev/null; [ $? = 3 ] && pass watch-skips-stale-run || fail watch-skips-stale-run
+$W t6 --latest --timeout 1 | grep -q '"state":"done"' && pass watch-latest || fail watch-latest
+
+# Ctrl-C: exit 130, from done.json (which lands after .exit).
+setp "$r" 'echo before; sleep 20'
+$W t6 --timeout 20 --interval 0.2 > "$S/w4.out" & wp=$!; sleep 0.5
+setsid bash -c "bash '$r'" >/dev/null 2>&1 & pid=$!; sleep 2; kill -INT -- -"$pid"; wait "$pid"; wait $wp
+[ "$(jq_ '(o["exit"],o["secs"]>=1)' < "$S/w4.out")" = "(130, True)" ] && pass watch-interrupt || { fail watch-interrupt; cat "$S/w4.out"; }
+
+# Killed outright (no exit code, lock released): reported as died.
+setp "$r" 'echo before-kill; sleep 20'
+$W t6 --timeout 20 --interval 0.2 > "$S/w5.out" & wp=$!; sleep 0.5
+setsid bash -c "bash '$r'" >/dev/null 2>&1 & pid=$!; sleep 2; kill -KILL -- -"$pid"; wait "$pid" 2>/dev/null; wait $wp
+[ "$(jq_ '(o["state"],"exit" in o,"before-kill" in o["tail"])' < "$S/w5.out")" = "('died', False, True)" ] && pass watch-died || { fail watch-died; cat "$S/w5.out"; }
+pkill -f '^sleep 20$'
+
+# su failed (no .started): not-started.
+setp "$r" 'echo x'; bash "$r" >/dev/null 2>&1; id=$(basename "$(readlink $d/latest.log)" .log); rm -f $d/$id.started
+$W t6 --latest --timeout 1 | grep -q '"state":"not-started"' && pass watch-not-started || fail watch-not-started
+# Harness scaffolded before done.json (only .exit): still delivered once the lock is free.
+setp "$r" 'echo old'; bash "$r" >/dev/null 2>&1; id=$(basename "$(readlink $d/latest.log)" .log); rm -f $d/$id.done.json
+$W t6 --timeout 5 --interval 0.2 | grep -q '"state":"done","exit":0' && pass watch-old-harness || fail watch-old-harness
+$W nope --timeout 1 2>/dev/null; [ $? = 2 ] && pass watch-bad-slug || fail watch-bad-slug
+
 exit "$failed"

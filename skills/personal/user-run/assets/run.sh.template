@@ -6,6 +6,7 @@
 #   Run:      bash __SLUG_DIR__/run.sh
 #   Logs:     __SLUG_DIR__/<RUN_ID>.log, latest.log -> newest
 #   Exit:     __SLUG_DIR__/latest.exit (exit code; absent while running)
+#   Done:     __SLUG_DIR__/<RUN_ID>.done.json (exit, duration, artifacts; written last)
 #   Outputs:  __SLUG_DIR__/artifacts/<RUN_ID>/ ($ARTIFACTS), artifacts/latest -> newest
 #
 # The body is one function, parsed whole before it runs, so editing this file
@@ -63,11 +64,23 @@ rm -f "$SLUG_DIR/latest.exit"
 ln -sfn "$RUN_ID.log" "$SLUG_DIR/latest.log"
 ln -sfn "$RUN_ID" "$SLUG_DIR/artifacts/latest"
 
+START_ISO="$(date -Is)"; START_S="$(date +%s)"
 {
   finish() {
     # Files first: if the terminal hung up, tee is gone and echo dies of SIGPIPE.
     echo "$1" > "$SLUG_DIR/$RUN_ID.exit"
     ln -sfn "$RUN_ID.exit" "$SLUG_DIR/latest.exit"
+    # Completion marker for watch.py, written atomically (tmp + rename) so a
+    # watcher never reads half of it. Every value is a number, a timestamp or
+    # a path under SLUG_DIR (scaffold.sh restricts its characters): no escaping.
+    local end_s started=false n
+    end_s="$(date +%s)"
+    [ -e "$SLUG_DIR/$RUN_ID.started" ] && started=true
+    n="$(find "$ARTIFACTS" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)"
+    printf '{"slug":"%s","run":"%s","exit":%s,"started":%s,"signal":"%s","start":"%s","end":"%s","secs":%s,"log":"%s","artifacts_dir":"%s","artifacts":%s}\n' \
+      "__SLUG__" "$RUN_ID" "$1" "$started" "$sig" "$START_ISO" "$(date -Is)" "$((end_s - START_S))" \
+      "$LOG" "$ARTIFACTS" "$n" > "$SLUG_DIR/.$RUN_ID.done.tmp" \
+      && mv -f "$SLUG_DIR/.$RUN_ID.done.tmp" "$SLUG_DIR/$RUN_ID.done.json"
     echo "== end=$(date -Is) exit=$1"
   }
   # Signals are noted, not acted on: the child gets them too, and its own exit
