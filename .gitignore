@@ -80,14 +80,10 @@ skills/mattpocock-skills/
 
 # Transitory scratch artifacts (reviews, notes) — not canonical
 scratch/
-.worktrees/parallel-agents/aib-lqp.1/
-.worktrees/parallel-agents/aib-33y/
-.worktrees/parallel-agents/aib-c0n/
-.worktrees/parallel-agents/aib-mg8/
-.worktrees/parallel-agents/aib-lqp.2/
-.worktrees/parallel-agents/aib-b9x/
-.worktrees/parallel-agents/aib-lqp.3/
-.worktrees/parallel-agents/aib-2ct/
+
+# Agent worktrees (implementation + review snapshots), ignored once here so
+# creating one never edits this tracked file.
+.worktrees/
 
 # bv (beads viewer) local config and caches
 .bv/
@@ -97,23 +93,6 @@ scratch/
 .codex/*.sqlite-shm
 .codex/*.sqlite-wal
 !.beads/PRIME.md
-.worktrees/parallel-agents/aib-kwx/
-.worktrees/parallel-agents/aib-3jm/
-.worktrees/parallel-agents/aib-zje/
-.worktrees/parallel-agents/aib-alo/
-.worktrees/parallel-agents/aib-3f1/
-# review worktree
-.worktrees/parallel-agents/aib-qwq/
-.worktrees/parallel-agents/aib-tti/
-.worktrees/parallel-agents/aib-ci6/
-.worktrees/parallel-agents/aib-c4m/
-.worktrees/parallel-agents/aib-06r/
-.worktrees/parallel-agents/aib-b1q/
-.worktrees/parallel-agents/aib-3kl/
-.worktrees/parallel-agents/aib-92u/
-.worktrees/parallel-agents/aib-wfl/
-.worktrees/parallel-agents/aib-52g/
-.worktrees/parallel-agents/aib-5jq/
 
 # Optional product-owned HUD skill source (local checkout path only).
 /.tze-hud-repo

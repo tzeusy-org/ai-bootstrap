@@ -14,7 +14,7 @@ tokens:
    actor is whatever `--actor` resolves to, so it only excludes peers that use
    distinct ids ("Parallel Coordinators" below). Verify success from the
    command result (`assignee` is this coordinator), not from a later reread.
-2. **Worktree creation backstop** — `bd worktree create` fails when the
+2. **Worktree creation backstop** — `git worktree add -b` fails when the
    `agent/<id>` branch already exists. This prevents a same-actor session from
    double-dispatching a bead it already has in flight. If worktree creation
    fails on an existing branch, do not dispatch a second worker.
@@ -446,8 +446,8 @@ Beads data lives in Dolt DB, not git-tracked files.
 
 `bd create/update/close/dep` mutate the Dolt database directly. The sql-server
 is a shared external service (`dolt_mode: server`, `--external` in
-`.beads/config.yaml`): `bd` never starts or stops it. Worker worktrees share
-the same DB via redirect files created by `bd worktree create`.
+`.beads/config.yaml`): `bd` never starts or stops it. Worker worktrees reach
+the same DB through the tracked `.beads/config.yaml` (no redirect file).
 
 Rules:
 1. Keep the Dolt server healthy. Run `bd dolt status` before heavy mutation
