@@ -362,6 +362,10 @@ bd --actor "$COORDINATOR_ID" dep add <new-id> <original-id> --type discovered-fr
 
 `discovered-from` records provenance without blocking either bead; the default
 `blocks` type on a new-behavior follow-up would park the original behind it.
+From worker reports, `Blockers-JSON` entries take the blocker edge and
+`Discovered-Follow-Ups-JSON` entries take `discovered-from`, whatever their
+`depends_on` says. A duplicate creates nothing: link the existing bead to the
+original with `discovered-from`.
 
 ## Step 7: Per-member reconciliation and safe cleanup
 
