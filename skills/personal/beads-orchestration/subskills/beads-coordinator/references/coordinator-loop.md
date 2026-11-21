@@ -299,7 +299,9 @@ the tracked `.gitignore`, which already ignores `.worktrees/`. The worktree reac
 the same beads database through the tracked `.beads/config.yaml`.
 
 Recover an existing branch/worktree rather than overwriting it. Publish useful
-commits before a wait/preemption. Never edit or move the shared root checkout.
+commits before a wait/preemption. Never edit or move the shared root checkout, except the gitignored state of an
+owner-requested `scope:local-state` action (looper implement-cycle.md, "Select
+and claim").
 
 ## Step 4: Continue the accountable owner
 
