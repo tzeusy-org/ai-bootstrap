@@ -19,6 +19,20 @@ coordinator stays "live" for a day or a live one reads as dead:
         --id "$COORDINATOR_ID" --wake-minutes 30 [--startup] [--extra-lanes N]
     uv run scripts/coordinator_registry.py deregister --repo-root "$REPO_ROOT" --id "$COORDINATOR_ID"
 
+`heartbeat` writes the one canonical stall-heartbeat block into a held bead's
+notes (`references/runtime-and-safety.md` → "Stall heartbeat"):
+
+    uv run scripts/coordinator_registry.py heartbeat --repo-root "$REPO_ROOT" \
+        --id "$COORDINATOR_ID" --bead <issue-id> [--min-age-minutes 5]
+
+It replaces an existing block (collapsing duplicates) or appends one, leaving
+the rest of the notes untouched; skips the write while this id's block is
+younger than `--min-age-minutes`; and writes only under `--if-assignee`, so a
+bead this id does not hold is refused (`not-assignee`, exit 13). bd has no
+compare-and-swap on notes: the helper re-reads just before writing and retries
+if the notes changed, which narrows but cannot close the window in which a
+concurrent append to the same notes is lost.
+
 `register` writes `{"expires_at": now + wake + 15m}` (plus `extra_lanes`) only
 when the stored entry would lapse before the next wake or its `extra_lanes`
 changed, so routine wakes add no tracker history. `--startup` refuses an id
@@ -71,6 +85,16 @@ TRANSIENT_MARKERS = (
     "invalid connection",
 )
 sleep = time.sleep
+# Only the exact canonical shape is a block; anything else carrying the tag is
+# malformed and refused, so a stray tag never swallows neighbouring notes.
+HEARTBEAT_BLOCK_RE = re.compile(
+    r"\n*\[beads-heartbeat\][ \t]*\r?\nowner=\S+[ \t]*\r?\nlast_heartbeat_at=\S+[ \t]*\r?\n\[/beads-heartbeat\][ \t]*(?:\r?\n|$)"
+)
+HEARTBEAT_TAG_RE = re.compile(r"\[/?beads-heartbeat\]")
+HEARTBEAT_FIELDS_RE = re.compile(
+    r"\[beads-heartbeat\]\s*owner=(\S+)\s*last_heartbeat_at=(\S+)\s*\[/beads-heartbeat\]"
+)
+HEARTBEAT_WRITE_ATTEMPTS = 3
 
 
 def parse_time(value: object) -> datetime | None:
@@ -161,6 +185,37 @@ def plan_registration(
     return "write", value
 
 
+def heartbeat_block(coordinator_id: str, now: datetime) -> str:
+    return f"[beads-heartbeat]\nowner={coordinator_id}\nlast_heartbeat_at={format_time(now)}\n[/beads-heartbeat]"
+
+
+def plan_heartbeat(notes: str | None, coordinator_id: str, *, now: datetime, min_age: timedelta) -> tuple[str, str | None]:
+    """Return ("fresh", None), ("malformed", None) or ("write", new_notes).
+
+    A write leaves exactly one canonical block. Other note content is preserved
+    in order; the block goes where the first existing block was, or at the end.
+    Any heartbeat tag outside a canonical block is "malformed": rewriting around
+    it would either drop notes or leave a stale block that cleanup reads first.
+    """
+    notes = notes or ""
+    blocks = list(HEARTBEAT_BLOCK_RE.finditer(notes))
+    if len(HEARTBEAT_TAG_RE.findall(notes)) != 2 * len(blocks):
+        return "malformed", None
+    if len(blocks) == 1:
+        fields = HEARTBEAT_FIELDS_RE.search(blocks[0].group(0))
+        last = parse_time(fields.group(2)) if fields else None
+        if fields and fields.group(1) == coordinator_id and last and timedelta(0) <= now - last < min_age:
+            return "fresh", None
+    block = heartbeat_block(coordinator_id, now)
+    if not blocks:
+        body = notes.rstrip("\n")
+        return "write", f"{body}\n\n{block}" if body else block
+    head = notes[: blocks[0].start()].rstrip("\n")
+    tail = HEARTBEAT_BLOCK_RE.sub("\n", notes[blocks[0].start():]).strip("\n")
+    parts = [part for part in (head, block, tail) if part]
+    return "write", "\n\n".join(parts)
+
+
 def classify_failure(returncode: int | None, stderr: str | None) -> str:
     """Name a failed command's cause with a sanitized code.
 
@@ -215,12 +270,55 @@ def failure(step: str, coordinator_id: str, result: subprocess.CompletedProcess[
     }
 
 
+def read_notes(bead: str, repo_root: Path, actor: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Return (record, None) or (None, failure-payload) for `bd show <bead>`."""
+    result, attempts = bd(["show", bead, "--json"], repo_root, actor)
+    if result.returncode != 0:
+        return None, failure("show", actor, result, attempts)
+    try:
+        rows = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        rows = None
+    record = rows[0] if isinstance(rows, list) and rows else rows
+    if not isinstance(record, dict) or record.get("id") != bead:
+        return None, {"action": "failed", "attempts": attempts, "detail": "", "error": "invalid-json", "id": actor, "step": "show"}
+    return record, None
+
+
+def heartbeat(repo_root: Path, coordinator_id: str, bead: str, *, now: datetime, min_age: timedelta) -> tuple[dict[str, Any], int]:
+    for _ in range(HEARTBEAT_WRITE_ATTEMPTS):
+        record, error = read_notes(bead, repo_root, coordinator_id)
+        if error:
+            return {**error, "bead": bead}, 1
+        if record.get("assignee") != coordinator_id:
+            return {"action": "refused", "error": "not-assignee", "id": coordinator_id, "bead": bead}, 13
+        action, notes = plan_heartbeat(record.get("notes"), coordinator_id, now=now, min_age=min_age)
+        if action == "fresh":
+            return {"action": "fresh", "id": coordinator_id, "bead": bead}, 0
+        if action == "malformed":
+            return {"action": "refused", "error": "malformed-heartbeat", "id": coordinator_id, "bead": bead}, 1
+        latest, error = read_notes(bead, repo_root, coordinator_id)
+        if error:
+            return {**error, "bead": bead}, 1
+        if (latest.get("notes") or "") != (record.get("notes") or ""):
+            continue
+        result, attempts = bd(
+            ["update", bead, "--notes", notes, "--if-assignee", coordinator_id, "--json"], repo_root, coordinator_id
+        )
+        if result.returncode == 13:
+            return {"action": "refused", "error": "not-assignee", "id": coordinator_id, "bead": bead}, 13
+        if result.returncode != 0:
+            return {**failure("update", coordinator_id, result, attempts), "bead": bead}, 1
+        return {"action": "written", "id": coordinator_id, "bead": bead, "last_heartbeat_at": format_time(now)}, 0
+    return {"action": "failed", "error": "notes-changing", "id": coordinator_id, "bead": bead, "step": "update"}, 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Write this coordinator's registry entry.")
     sub = parser.add_subparsers(dest="command", required=True)
     make = sub.add_parser("new-id", help="Print a fresh COORDINATOR_ID.")
     make.add_argument("--runtime", required=True, help="Short runtime name, e.g. claude or codex.")
-    for name in ("register", "deregister"):
+    for name in ("register", "deregister", "heartbeat"):
         command = sub.add_parser(name)
         command.add_argument("--repo-root", required=True, type=Path)
         command.add_argument("--id", required=True, help="This coordinator's COORDINATOR_ID.")
@@ -228,6 +326,10 @@ def main() -> int:
             command.add_argument("--wake-minutes", required=True, type=int, help="Minutes until the next planned wake.")
             command.add_argument("--extra-lanes", type=int, default=0, help="Lanes the tracker cannot see (Team Lead subworkers).")
             command.add_argument("--startup", action="store_true", help="Refuse if this id is already live.")
+        if name == "heartbeat":
+            command.add_argument("--bead", required=True, help="Held bead whose notes carry the heartbeat.")
+            command.add_argument("--min-age-minutes", type=int, default=5,
+                                 help="Skip the write while this id's block is younger than this.")
     args = parser.parse_args()
     now = datetime.now(timezone.utc)
 
@@ -243,6 +345,12 @@ def main() -> int:
         return 2
     key = REGISTRY_PREFIX + args.id
     repo_root = args.repo_root.resolve()
+    if args.command == "heartbeat":
+        payload, code = heartbeat(
+            repo_root, args.id, args.bead, now=now, min_age=timedelta(minutes=max(args.min_age_minutes, 0))
+        )
+        print(json.dumps(payload))
+        return code
     if args.command == "deregister":
         result, attempts = bd(["kv", "clear", key], repo_root, args.id)
         if result.returncode != 0:

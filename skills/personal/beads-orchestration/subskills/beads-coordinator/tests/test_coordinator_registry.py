@@ -160,5 +160,122 @@ class CliFailureReportTests(unittest.TestCase):
         self.assertEqual((payload["error"], payload["step"]), ("invalid-json", "kv-list"))
 
 
+NOW = registry.datetime(2026, 11, 21, 12, 0, tzinfo=registry.timezone.utc)
+FIVE = registry.timedelta(minutes=5)
+
+
+def block(owner: str = ID, at: str = "2026-11-21T11:58:00Z") -> str:
+    return f"[beads-heartbeat]\nowner={owner}\nlast_heartbeat_at={at}\n[/beads-heartbeat]"
+
+
+def shown(notes: str | None, assignee: str = ID, bead: str = "aib-1") -> subprocess.CompletedProcess[str]:
+    return done(0, stdout=json.dumps([{"id": bead, "assignee": assignee, "notes": notes}]))
+
+
+class PlanHeartbeatTests(unittest.TestCase):
+    def test_insert_keeps_other_notes(self) -> None:
+        action, notes = registry.plan_heartbeat("Packet: see design.", ID, now=NOW, min_age=FIVE)
+        self.assertEqual(action, "write")
+        self.assertEqual(notes, "Packet: see design.\n\n" + block(at="2026-11-21T12:00:00Z"))
+        self.assertEqual(registry.plan_heartbeat(None, ID, now=NOW, min_age=FIVE)[1],
+                         block(at="2026-11-21T12:00:00Z"))
+
+    def test_replace_in_place_and_collapse_duplicates(self) -> None:
+        notes = "\n\n".join(["head", block(at="2026-11-21T11:00:00Z"), "middle",
+                              block(owner="coordinator:other"), "tail"])
+        action, updated = registry.plan_heartbeat(notes, ID, now=NOW, min_age=FIVE)
+        self.assertEqual(action, "write")
+        self.assertEqual(updated.count("[beads-heartbeat]"), 1)
+        self.assertEqual(updated, "\n\n".join(["head", block(at="2026-11-21T12:00:00Z"), "middle", "tail"]))
+
+    def test_fresh_own_block_is_not_rewritten(self) -> None:
+        self.assertEqual(registry.plan_heartbeat(block(), ID, now=NOW, min_age=FIVE), ("fresh", None))
+        stale = block(at="2026-11-21T11:50:00Z")
+        foreign = block(owner="coordinator:other")
+        future = block(at="2026-11-21T12:30:00Z")
+        for notes in (stale, foreign, future):
+            with self.subTest(notes=notes):
+                self.assertEqual(registry.plan_heartbeat(notes, ID, now=NOW, min_age=FIVE)[0], "write")
+
+
+class MalformedHeartbeatTests(unittest.TestCase):
+    def test_stray_or_broken_tags_are_refused_without_a_write(self) -> None:
+        cases = {
+            "unclosed before a valid block": "intro\n[beads-heartbeat]\nowner=x\nIMPORTANT NOTE\n\n" + block() + "\nafter",
+            "unclosed with its own timestamp": "[beads-heartbeat]\nowner=x\nlast_heartbeat_at=2026-11-21T11:59:00Z\n",
+            "prose mention": "see [beads-heartbeat] ... [/beads-heartbeat] here",
+            "stray closing tag": "done [/beads-heartbeat]",
+        }
+        for name, notes in cases.items():
+            with self.subTest(name=name):
+                self.assertEqual(registry.plan_heartbeat(notes, ID, now=NOW, min_age=FIVE), ("malformed", None))
+
+    def test_crlf_canonical_block_is_replaced(self) -> None:
+        notes = "head\r\n" + block(at="2026-11-21T11:00:00Z").replace("\n", "\r\n") + "\r\ntail"
+        action, updated = registry.plan_heartbeat(notes, ID, now=NOW, min_age=FIVE)
+        self.assertEqual(action, "write")
+        self.assertEqual(updated.count("[beads-heartbeat]"), 1)
+        self.assertIn("last_heartbeat_at=2026-11-21T12:00:00Z", updated)
+        self.assertTrue(updated.startswith("head") and updated.endswith("tail"))
+
+    def test_command_refuses_malformed_notes(self) -> None:
+        fake = FakeBd(shown("[beads-heartbeat]\nowner=x\n"))
+        with mock.patch.object(registry.subprocess, "run", fake), mock.patch.object(registry, "sleep"):
+            payload, code = registry.heartbeat(Path("/repo"), ID, "aib-1", now=NOW, min_age=FIVE)
+        self.assertEqual((code, payload["error"]), (1, "malformed-heartbeat"))
+        self.assertEqual(len(fake.calls), 1)
+
+
+class HeartbeatCommandTests(unittest.TestCase):
+    def run_heartbeat(self, fake: FakeBd) -> tuple[dict[str, object], int]:
+        with mock.patch.object(registry.subprocess, "run", fake), mock.patch.object(registry, "sleep"):
+            return registry.heartbeat(Path("/repo"), ID, "aib-1", now=NOW, min_age=FIVE)
+
+    def test_writes_under_the_assignee_guard(self) -> None:
+        fake = FakeBd(shown("notes"), shown("notes"), done(0, stdout="[]"))
+        payload, code = self.run_heartbeat(fake)
+        self.assertEqual((code, payload["action"]), (0, "written"))
+        update = fake.calls[2]
+        self.assertEqual(update[update.index("--if-assignee") + 1], ID)
+        self.assertIn("notes\n\n[beads-heartbeat]", update[update.index("--notes") + 1])
+
+    def test_refuses_a_bead_held_by_someone_else(self) -> None:
+        for assignee in ("coordinator:other", "", None):
+            with self.subTest(assignee=assignee):
+                fake = FakeBd(shown("notes", assignee=assignee))
+                payload, code = self.run_heartbeat(fake)
+                self.assertEqual((code, payload["error"]), (13, "not-assignee"))
+                self.assertEqual(len(fake.calls), 1)
+
+    def test_guard_mismatch_at_write_time_is_refused(self) -> None:
+        fake = FakeBd(shown("n"), shown("n"), done(13, stderr="precondition no longer held"))
+        payload, code = self.run_heartbeat(fake)
+        self.assertEqual((code, payload["error"]), (13, "not-assignee"))
+
+    def test_notes_changed_between_reads_is_retried(self) -> None:
+        fake = FakeBd(shown("a"), shown("a\nb"), shown("a\nb"), shown("a\nb"), done(0, stdout="[]"))
+        payload, code = self.run_heartbeat(fake)
+        self.assertEqual((code, payload["action"]), (0, "written"))
+        self.assertIn("a\nb\n\n[beads-heartbeat]", fake.calls[4][fake.calls[4].index("--notes") + 1])
+
+    def test_notes_that_keep_changing_fail_without_writing(self) -> None:
+        reads = [shown(str(i)) for i in range(2 * registry.HEARTBEAT_WRITE_ATTEMPTS)]
+        fake = FakeBd(*reads)
+        payload, code = self.run_heartbeat(fake)
+        self.assertEqual((code, payload["error"]), (1, "notes-changing"))
+        self.assertFalse(any("update" in call for call in fake.calls))
+
+    def test_fresh_block_skips_the_write(self) -> None:
+        fake = FakeBd(shown(block()))
+        payload, code = self.run_heartbeat(fake)
+        self.assertEqual((code, payload["action"]), (0, "fresh"))
+        self.assertEqual(len(fake.calls), 1)
+
+    def test_read_failure_is_reported(self) -> None:
+        fake = FakeBd(*(done(1, stderr=TIMEOUT) for _ in range(3)))
+        payload, code = self.run_heartbeat(fake)
+        self.assertEqual((code, payload["error"], payload["step"]), (1, "server-timeout", "show"))
+
+
 if __name__ == "__main__":
     unittest.main()
