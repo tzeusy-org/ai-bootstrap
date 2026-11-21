@@ -127,14 +127,44 @@ def extract_original_id(description):
     return sorted(matches), sorted(set(malformed))
 
 
+PR_URL_RE = re.compile(r"https://github\.com/([^/\s]+)/([^/\s]+)/pull/([0-9]+)")
+
+
 def extract_pr_number(description):
-    match = re.search(r"https://github\.com/[^/\s]+/[^/\s]+/pull/([0-9]+)", description or "")
-    return match.group(1) if match else ""
+    match = PR_URL_RE.search(description or "")
+    return match.group(3) if match else ""
+
+
+def recorded_repo(description, pr_number):
+    """Return the `owner/repo` of a PR URL for `pr_number` recorded in the bead."""
+    slugs = {
+        f"{m.group(1)}/{m.group(2)}"
+        for m in PR_URL_RE.finditer(description or "")
+        if m.group(3) == str(pr_number)
+    }
+    if len(slugs) > 1:
+        fail("ambiguous-pr-repository", "review bead records the PR under several repositories",
+             candidates=sorted(slugs))
+    return slugs.pop() if slugs else ""
+
+
+def verify_pr_identity(pr, owner_repo, pr_number):
+    """Fail closed unless gh answered for exactly `owner_repo#pr_number`."""
+    match = PR_URL_RE.fullmatch(pr.get("url") or "")
+    if (
+        not match
+        or f"{match.group(1)}/{match.group(2)}".lower() != owner_repo.lower()
+        or match.group(3) != str(pr_number)
+        or pr.get("number") != int(pr_number)
+    ):
+        fail("pr-identity-mismatch", f"gh returned {pr.get('url')!r}, not {owner_repo}#{pr_number}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Resolve original bead and PR context for a pr-review-task bead.")
     parser.add_argument("--issue-id", required=True, help="Review bead id, for example bd-123")
+    parser.add_argument("--repo", dest="repo_slug", default="",
+                        help="Requested OWNER/REPO; overrides the PR URL recorded in the review bead")
     args = parser.parse_args()
 
     try:
@@ -243,16 +273,30 @@ def main():
         if not pr_number:
             fail("missing-pr-number", "unable to resolve PR number", original_id=original_id)
 
-        owner_repo = run(["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]).strip()
+        # The requested repository comes from the caller or the PR URL recorded
+        # in the review bead; the cwd checkout must agree with it, so a wrong
+        # checkout with a colliding PR number fails instead of answering.
+        cwd_repo = run(["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]).strip()
+        requested = args.repo_slug or recorded_repo(review_description, pr_number)
+        repo_source = "argument" if args.repo_slug else ("review-bead" if requested else "cwd")
+        owner_repo = requested or cwd_repo
+        if not re.fullmatch(r"[^/\s]+/[^/\s]+", owner_repo):
+            fail("repo-unresolved", "unable to resolve the PR repository", owner_repo=owner_repo)
+        if owner_repo.lower() != cwd_repo.lower():
+            fail("repo-mismatch", f"checkout is {cwd_repo!r}, but the review targets {owner_repo!r}",
+                 cwd_repo=cwd_repo, owner_repo=owner_repo)
         owner, repo = owner_repo.split("/", 1)
         pr = run_json([
             "gh",
             "pr",
             "view",
             pr_number,
+            "--repo",
+            owner_repo,
             "--json",
             "number,url,state,isDraft,mergeStateStatus,reviewDecision,headRefName,baseRefName,mergedAt,headRefOid",
         ])
+        verify_pr_identity(pr, owner_repo, pr_number)
 
         if delivery and (pr.get("headRefName") != delivery_branch(delivery) or pr.get("baseRefName") != delivery["base_branch"]):
             fail("invalid-delivery-branch", "PR branch or base differs from the accepted package")
@@ -268,6 +312,7 @@ def main():
             "owner": owner,
             "repo": repo,
             "owner_repo": owner_repo,
+            "repo_source": repo_source,
             "head_branch": pr.get("headRefName"),
             "base_branch": pr.get("baseRefName"),
             "head_sha": pr.get("headRefOid"),

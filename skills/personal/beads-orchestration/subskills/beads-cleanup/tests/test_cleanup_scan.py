@@ -1914,6 +1914,8 @@ class CleanupScanTests(unittest.TestCase):
                     "pr",
                     "view",
                     "41",
+                    "--repo",
+                    "owner/repo",
                     "--json",
                     "number,url,state,isDraft,mergeStateStatus,reviewDecision,headRefName,baseRefName,mergedAt,headRefOid",
                 ],
