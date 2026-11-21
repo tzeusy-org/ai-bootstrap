@@ -27,8 +27,9 @@ current bounded work, retaining outcome affinity without claiming future backlog
 
 ## Work
 
-Create/recover one `agent/<anchor>` worktree using `bd worktree create` from the
-actual repository. Never move/edit the shared root checkout. Use
+Create/recover one `agent/<anchor>` worktree with plain `git worktree add` from the
+actual repository ([coordinator Step 3](../../beads-coordinator/references/coordinator-loop.md#step-3-claim-publish-current-packet-and-isolate)
+shows the command; never `bd worktree create`, which edits the tracked `.gitignore`). Never move/edit the shared root checkout. Use
 [worker phases](../../beads-worker/SKILL.md) with `ISSUE_ID=<anchor>` and optional
 `DELIVERY_FILE`; bootstrap verifies actual cwd, Git identity and membership.
 Read the concise current packet and referenced contracts, not the archive.

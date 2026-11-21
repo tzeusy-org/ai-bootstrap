@@ -274,8 +274,14 @@ session and resume locator. Never bulk-claim future outcome descendants.
 Create one worktree bound to the actual repository:
 
 ```bash
-(cd "${REPO_ROOT}" && bd worktree create ".worktrees/parallel-agents/${ISSUE_ID}" --branch "agent/${ISSUE_ID}")
+git -C "${REPO_ROOT}" worktree add -b "agent/${ISSUE_ID}" ".worktrees/parallel-agents/${ISSUE_ID}" "${BASE_REF}"
+chmod 700 "${REPO_ROOT}/.worktrees/parallel-agents/${ISSUE_ID}/.beads"
 ```
+
+`BASE_REF` is the package's fetched delivery base (e.g. `origin/main`). Use plain
+`git worktree add`, not `bd worktree create`: bd appends every worktree path to
+the tracked `.gitignore`, which already ignores `.worktrees/`. The worktree reaches
+the same beads database through the tracked `.beads/config.yaml`.
 
 Recover an existing branch/worktree rather than overwriting it. Publish useful
 commits before a wait/preemption. Never edit or move the shared root checkout.
@@ -380,7 +386,8 @@ assignee checks; never clear foreign or pre-existing claims as compensation.
 A failed bootstrap with useful work gets recovery, not deletion. Keep published
 branches and local-only work. Remove worktrees/branches only after verifying
 clean state, no unpublished commits, no pending correction and completed/handoff
-recovery receipts. Never delete unrelated stashes or worktrees.
+recovery receipts, with plain `git worktree remove <path>` (never `bd worktree
+remove`). Never delete unrelated stashes or worktrees.
 
 ## Step 8: Event-driven continuation and report
 

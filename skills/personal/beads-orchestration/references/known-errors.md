@@ -318,6 +318,17 @@ troubleshooting steps instead. Use `bd dolt status`, `bd version`, and
   check is `bd dolt show --json` → `embedded:false, connection_ok:true` and
   no `auto-importing` line in any `bd` output.)
 
+### `bd worktree create` appends to the tracked `.gitignore`
+- **Symptom**: every `bd worktree create <path>` inside the repo appends a
+  `# bd worktree` comment and the worktree path to the tracked `.gitignore`
+  and never removes it; the first create also prints `Fixed .beads permissions
+  to 0700`. bd 1.3.1 has no flag to skip the write.
+- **Fix (2026-11-21, aib-aq7)**: create worktrees with `git worktree add -b
+  agent/<id> .worktrees/parallel-agents/<id> <base>`, then `chmod 700
+  <worktree>/.beads`; `.gitignore` ignores `.worktrees/` once. bd resolves the
+  same database from the worktree's tracked `.beads/config.yaml`.
+- Observed: 2026-11-21, bd 1.3.1, aib repo.
+
 ### `bd worktree remove` may rewrite `.gitignore` comments
 - **Symptom**: after removing a worktree through `bd worktree remove`,
   `.gitignore` is modified even though the removed worktree path is gone; in
@@ -325,8 +336,8 @@ troubleshooting steps instead. Use `bd dolt status`, `bd version`, and
   worktree paths were stripped.
 - **Cause**: the helper rewrites the worktree ignore block instead of preserving
   surrounding comments byte-for-byte.
-- **Workaround**: for cleanup of Rust/code worktrees that were created with
-  `git worktree add`, prefer plain `git worktree remove <path>` plus explicit
+- **Workaround**: for every agent worktree (all are created with `git worktree
+  add`), use plain `git worktree remove <path>` plus explicit
   `git branch -D agent/<id>` and remote-branch cleanup after bead closure. If
   `bd worktree remove` was already used, inspect `git diff -- .gitignore` and
   restore comment-only churn unless the ignore entries themselves changed.
