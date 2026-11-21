@@ -258,7 +258,8 @@ def main():
         "merge_ok": len(reasons) == 0,
         "merge_queue": merge_queue,
         "merge_command": (
-            "gh pr merge --squash --auto" if merge_queue else "gh pr merge --squash"
+            f"gh pr merge {args.pr_number} --repo {args.owner}/{args.repo} --squash"
+            + (" --auto" if merge_queue else "")
         ),
         "reasons": reasons,
     }

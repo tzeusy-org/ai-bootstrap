@@ -129,7 +129,7 @@ def _make_gh_evaluate(bin_dir: FakeBinDir, *, pr_state: str = "OPEN",
                        merge_queue_rules: int | None = None,
                        label_pages: list | None = None,
                        labels_error: bool = False,
-                       returned_url: str | None = None) -> None:
+                       pr_overrides: dict | None = None) -> None:
     """Configure a fake `gh` for evaluate_merge_readiness tests.
 
     ``merge_queue_rules`` is the number of ``merge_queue`` rules the branch
@@ -139,7 +139,8 @@ def _make_gh_evaluate(bin_dir: FakeBinDir, *, pr_state: str = "OPEN",
     ``--repo OWNER/REPO`` they answer for that repository; without it they
     answer for the cwd's repository (``cwd/other``), whose PR 42 is an
     unrelated, long-merged PR with green checks (the aib-6m4 incident).
-    ``returned_url`` forces the URL a scoped ``gh pr view`` reports.
+    ``pr_overrides`` replaces fields a scoped ``gh pr view`` reports; a
+    ``None`` value drops that field.
     """
     thread_nodes = json.dumps([{"isResolved": False}] * unresolved +
                               [{"isResolved": True}] * 0)
@@ -183,7 +184,12 @@ if 'pr' in argv and 'view' in argv and '--json' in argv:
         print({repr(cwd_pr_json)})
         sys.exit(0)
     pr = json.loads({repr(pr_fields_json)})
-    pr["url"] = {returned_url!r} or "https://github.com/" + scoped + "/pull/42"
+    pr["url"] = "https://github.com/" + scoped + "/pull/42"
+    for key, value in json.loads({json.dumps(pr_overrides or {})!r}).items():
+        if value is None:
+            pr.pop(key, None)
+        else:
+            pr[key] = value
     print(json.dumps(pr))
     sys.exit(0)
 
@@ -240,14 +246,18 @@ class EvaluateMergeReadinessTests(unittest.TestCase):
 
     def test_returned_pr_identity_mismatch_fails_closed(self) -> None:
         mismatches = [
-            "https://github.com/cwd/other/pull/42",
-            "https://github.com/owner/repo/pull/43",
-            "https://github.com/owner/repo-fork/pull/42",
-            "",
+            {"url": "https://github.com/cwd/other/pull/42"},
+            {"url": "https://github.com/owner/repo/pull/43"},
+            {"url": "https://github.com/owner/repo-fork/pull/42"},
+            {"url": "https://ghe.example.com/owner/repo/pull/42"},
+            {"url": "not a url"},
+            {"url": None},
+            {"number": 43},
+            {"number": None},
         ]
-        for url in mismatches:
-            with self.subTest(url=url), FakeBinDir() as fbd:
-                _make_gh_evaluate(fbd, review_decision="APPROVED", returned_url=url or "x")
+        for overrides in mismatches:
+            with self.subTest(overrides=overrides), FakeBinDir() as fbd:
+                _make_gh_evaluate(fbd, review_decision="APPROVED", pr_overrides=overrides)
                 result = run_script("evaluate_merge_readiness.py",
                                     ["--owner", "owner", "--repo", "repo", "--pr-number", "42"],
                                     env=fbd.env())
@@ -259,7 +269,7 @@ class EvaluateMergeReadinessTests(unittest.TestCase):
     def test_repository_identity_match_is_case_insensitive(self) -> None:
         with FakeBinDir() as fbd:
             _make_gh_evaluate(fbd, review_decision="APPROVED",
-                              returned_url="https://github.com/Owner/Repo/pull/42")
+                              pr_overrides={"url": "https://github.com/Owner/Repo/pull/42"})
             result = run_script("evaluate_merge_readiness.py",
                                 ["--owner", "owner", "--repo", "repo", "--pr-number", "42"],
                                 env=fbd.env())
@@ -275,7 +285,7 @@ class EvaluateMergeReadinessTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertIsNone(payload["merge_queue"])
-        self.assertEqual(payload["merge_command"], "gh pr merge --squash")
+        self.assertEqual(payload["merge_command"], "gh pr merge 42 --repo o/r --squash")
 
     def test_merge_queue_detected_selects_auto_merge_command(self) -> None:
         with FakeBinDir() as fbd:
@@ -286,7 +296,7 @@ class EvaluateMergeReadinessTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertTrue(payload["merge_queue"])
-        self.assertEqual(payload["merge_command"], "gh pr merge --squash --auto")
+        self.assertEqual(payload["merge_command"], "gh pr merge 42 --repo o/r --squash --auto")
 
     def test_no_merge_queue_rule_selects_direct_merge(self) -> None:
         with FakeBinDir() as fbd:
@@ -297,7 +307,7 @@ class EvaluateMergeReadinessTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertFalse(payload["merge_queue"])
-        self.assertEqual(payload["merge_command"], "gh pr merge --squash")
+        self.assertEqual(payload["merge_command"], "gh pr merge 42 --repo o/r --squash")
 
     def test_merge_ok_when_all_conditions_green(self) -> None:
         def page(names, more=False, cursor=None):

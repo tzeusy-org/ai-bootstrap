@@ -344,8 +344,8 @@ MERGE_JSON=$(python3 "<loaded beads-pr-reviewer-worker package>/scripts/evaluate
    branch; `MERGE_QUEUE=yes` from the coordinator overrides a `null` detection):
 
 ```bash
-owner_merge_guard "$PR_NUMBER" && gh pr merge "${PR_NUMBER}" --squash          # no queue; confirm state=MERGED -> merged-pr
-owner_merge_guard "$PR_NUMBER" && gh pr merge "${PR_NUMBER}" --squash --auto   # queue; confirm mergeQueueEntry -> merge-queued
+owner_merge_guard "$PR_NUMBER" && gh pr merge "${PR_NUMBER}" --repo "${OWNER}/${REPO}" --squash          # no queue; confirm state=MERGED -> merged-pr
+owner_merge_guard "$PR_NUMBER" && gh pr merge "${PR_NUMBER}" --repo "${OWNER}/${REPO}" --squash --auto   # queue; confirm mergeQueueEntry -> merge-queued
 ```
 
    Under a queue the reviewer's job ends at `merge-queued`; the queue rebuilds
