@@ -524,11 +524,11 @@ def bind_allowed(bind: str) -> bool:
     return address.version == 4 and (address.is_loopback or address in TAILSCALE_NETWORK)
 
 
-def log_tail(path: Path, limit: int = 400) -> str:
-    """The last bytes of a server log, for a startup error that explains itself."""
+def log_tail(path: Path, start: int = 0, limit: int = 400) -> str:
+    """The last bytes written since `start`, for a startup error that explains itself."""
     try:
         with open(path, "rb") as log:
-            log.seek(max(0, log.seek(0, os.SEEK_END) - limit))
+            log.seek(max(start, log.seek(0, os.SEEK_END) - limit))
             return log.read().decode("utf-8", "replace").strip().replace("\n", " | ")
     except OSError:
         return ""
@@ -549,6 +549,7 @@ def serve(folder: Path, bind: str, port: int) -> dict:
         if log_path.is_symlink():
             raise ValueError("server log must not be a symlink")
         with open(log_path, "ab") as log:
+            started_at = log.seek(0, os.SEEK_END)  # tail only this start's output
             process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()),
                 "--root", str(folder.parent), "--slug", folder.name, "_serve", "--bind", bind,
                 "--port", str(port), f"--instance={instance}"],  # a token may start with "-"
@@ -563,7 +564,7 @@ def serve(folder: Path, bind: str, port: int) -> dict:
                 return {"url": current["url"], "pid": current["pid"], "reused": False}
             if process.poll() is not None:
                 raise ValueError(f"server startup failed (exit {process.returncode}): "
-                                 f"{log_tail(log_path) or 'no output'}; see {log_path}")
+                                 f"{log_tail(log_path, started_at) or 'no output'}; see {log_path}")
             time.sleep(0.05)
         process.terminate()
         process.wait(timeout=3)
