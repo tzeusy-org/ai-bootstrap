@@ -271,6 +271,11 @@ class AssertWorkerContextTests(unittest.TestCase):
                 check=True,
             )
             self.assertFalse((worktree / "scripts").exists())
+            # Reports follow the publish step, so the branch is on origin.
+            remote = Path(tmp) / "origin.git"
+            subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+            subprocess.run(["git", "-C", str(repo_root), "remote", "add", "origin", str(remote)], check=True)
+            subprocess.run(["git", "-C", str(worktree), "push", "-q", "origin", "agent/bd-42"], check=True)
             env = {**os.environ, "WORKTREE_PATH": str(worktree), "REPO_ROOT": str(repo_root), "ISSUE_ID": "bd-42"}
             for name, block in blocks:
                 result = subprocess.run(
@@ -582,6 +587,24 @@ class WorkerReportVocabularyTests(unittest.TestCase):
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn("requires every commit pushed", result.stderr)
                     self.assertEqual(result.stdout, "")
+
+    def test_completed_report_for_a_never_pushed_branch_is_refused(self) -> None:
+        # aib-q0s1: a readable worktree without origin/<branch> is unpublished.
+        with tempfile.TemporaryDirectory() as tmp:
+            work = self.make_worktree(Path(tmp))
+            self.git(work, "push", "-q", "origin", "--delete", "agent/bd-42")
+            result = self.emit(work, *self.PR, "--remote-branch", "origin/elsewhere")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires a pushed branch: origin/agent/bd-42 does not exist", result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_unpushed_refusal_names_the_compared_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work = self.make_worktree(Path(tmp))
+            (work / "f").write_text("3\n")
+            self.git(work, "commit", "-q", "-am", "three")
+            result = self.emit(work, *self.PR, "--remote-branch", "origin/elsewhere")
+        self.assertIn("HEAD is ahead of origin/agent/bd-42", result.stderr)
 
     def test_completed_report_with_only_a_dirty_worktree_is_allowed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

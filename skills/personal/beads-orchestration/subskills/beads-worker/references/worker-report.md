@@ -44,9 +44,9 @@ Omit `--recovery-state`, `--dirty-worktree`, `--unpushed-commits` and
 `branch-pushed` for a completed report or a pushed branch with no local work,
 `no-code-changes` for a clean worktree with nothing unpushed (or a bootstrap
 failure where git shows no local work), else `local-only`. A completed report
-requires `branch-pushed`, and is refused while git shows HEAD ahead of
-`origin/<branch>` (a dirty worktree is allowed), so its handoff head is always
-on origin.
+requires `branch-pushed`, and is refused while git shows `origin/<branch>`
+missing or HEAD ahead of it (a dirty worktree is allowed), so its handoff head is
+always on origin. An unreadable worktree cannot be checked and is not refused.
 
 ## Standard Usage
 
