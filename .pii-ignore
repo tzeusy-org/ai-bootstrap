@@ -1,0 +1,11 @@
+# git pathspecs excluded from the pii-guard (dotfiles-public scripts/check-pii.sh).
+# Third-party content only; first-party skills stay guarded.
+# Vendored Excalidraw bundle: upstream contributor addresses in minified source.
+skills/personal/th-engineering/subskills/excalidraw-diagram/references/vendor/
+# SIL OFL licences of bundled fonts: font authors' contact addresses.
+skills/archive/canvas-design/canvas-fonts/*-OFL.txt
+# Archived upstream skills: their own example addresses (acme.com, email.com).
+skills/archive/connect-apps/SKILL.md
+skills/archive/connect/SKILL.md
+skills/archive/raffle-winner-picker/SKILL.md
+skills/archive/tailored-resume-generator/SKILL.md
