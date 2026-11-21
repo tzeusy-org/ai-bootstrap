@@ -5,6 +5,7 @@
 # ///
 import argparse
 import json
+import re
 import subprocess
 import sys
 
@@ -39,6 +40,8 @@ query($owner:String!, $repo:String!, $number:Int!, $after:String) {
 """.strip()
 
 ALLOWED_MERGE_STATES = {"CLEAN", "HAS_HOOKS", "UNSTABLE"}
+
+PR_URL = re.compile(r"^https://github\.com/([^/]+)/([^/]+)/pull/([0-9]+)$")
 
 
 def fail(code, message, **extra):
@@ -123,9 +126,32 @@ def owner_merge_held(owner, repo, pr_number):
         seen.add(after)
 
 
-def fetch_required_checks(pr_number):
+def verify_pr_identity(pr, owner, repo, pr_number):
+    """Fail closed unless gh answered for exactly the requested PR.
+
+    gh resolves an unscoped PR number against the cwd's repository, so a
+    colliding number in another checkout once yielded an unrelated merged PR.
+    """
+    match = PR_URL.match(pr.get("url") or "")
+    actual = (match.group(1), match.group(2), int(match.group(3))) if match else None
+    if (
+        actual is None
+        or actual[0].lower() != owner.lower()
+        or actual[1].lower() != repo.lower()
+        or actual[2] != pr_number
+        or pr.get("number") != pr_number
+    ):
+        fail(
+            "pr-identity-mismatch",
+            f"gh returned {pr.get('url')!r}, not {owner}/{repo}#{pr_number}",
+            pr_number=pr_number,
+        )
+
+
+def fetch_required_checks(owner, repo, pr_number):
     result = subprocess.run(
-        ["gh", "pr", "checks", str(pr_number), "--required", "--json", "state"],
+        ["gh", "pr", "checks", str(pr_number), "--repo", f"{owner}/{repo}",
+         "--required", "--json", "state"],
         capture_output=True,
         text=True,
     )
@@ -180,12 +206,15 @@ def main():
             "pr",
             "view",
             str(args.pr_number),
+            "--repo",
+            f"{args.owner}/{args.repo}",
             "--json",
-            "state,isDraft,mergeStateStatus,reviewDecision,mergedAt,url,baseRefName,headRefName",
+            "number,state,isDraft,mergeStateStatus,reviewDecision,mergedAt,url,baseRefName,headRefName",
         ])
+        verify_pr_identity(pr, args.owner, args.repo, args.pr_number)
         held = owner_merge_held(args.owner, args.repo, args.pr_number)
         unresolved = unresolved_count(args.owner, args.repo, args.pr_number)
-        checks = fetch_required_checks(args.pr_number)
+        checks = fetch_required_checks(args.owner, args.repo, args.pr_number)
         merge_queue = detect_merge_queue(args.owner, args.repo, pr.get("baseRefName"))
     except RuntimeError as exc:
         fail("command-failed", str(exc), pr_number=args.pr_number)
@@ -229,7 +258,8 @@ def main():
         "merge_ok": len(reasons) == 0,
         "merge_queue": merge_queue,
         "merge_command": (
-            "gh pr merge --squash --auto" if merge_queue else "gh pr merge --squash"
+            f"gh pr merge {args.pr_number} --repo {args.owner}/{args.repo} --squash"
+            + (" --auto" if merge_queue else "")
         ),
         "reasons": reasons,
     }
