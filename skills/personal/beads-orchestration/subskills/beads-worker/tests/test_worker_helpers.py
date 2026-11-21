@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
@@ -463,6 +464,118 @@ class EmitWorkerReportTests(unittest.TestCase):
         self.assertIn("Recovery-Details:", result.stdout)
         self.assertIn("Failing-Command: gh pr create --base main --head agent/bd-42", result.stdout)
         self.assertIn("Remote-Branch: origin/agent/bd-42", result.stdout)
+
+
+def report_field(stdout: str, name: str) -> str:
+    match = re.search(rf"^-? ?{re.escape(name)}: (.*)$", stdout, re.MULTILINE)
+    assert match, name
+    return match.group(1)
+
+
+class WorkerReportVocabularyTests(unittest.TestCase):
+    """aib-ah5: the emitter accepts what the docs tell a worker to pass."""
+
+    def git(self, cwd: Path, *argv: str) -> None:
+        subprocess.run(["git", "-C", str(cwd), *argv], check=True, capture_output=True,
+                       env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+                            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"})
+
+    def make_worktree(self, tmp: Path) -> Path:
+        """The documented flow: worktree from origin/main, push without -u, so @{u} is origin/main."""
+        remote, root, work = tmp / "remote.git", tmp / "root", tmp / "work"
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(remote)], check=True)
+        subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
+        (root / "f").write_text("0\n")
+        self.git(root, "add", "f")
+        self.git(root, "commit", "-q", "-m", "base")
+        self.git(root, "remote", "add", "origin", str(remote))
+        self.git(root, "push", "-q", "origin", "main")
+        self.git(root, "fetch", "-q", "origin")
+        self.git(root, "worktree", "add", "-q", "-b", "agent/bd-42", str(work), "origin/main")
+        (work / "f").write_text("1\n")
+        self.git(work, "commit", "-q", "-am", "one")
+        self.git(work, "push", "-q", "origin", "agent/bd-42")
+        return work
+
+    def emit(self, worktree: Path | str, *extra: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(["python3", str(EMIT_REPORT), "--issue-id", "bd-42", "--worktree-path", str(worktree),
+                               "--head-commit", "abc123", "--summary", "s", *extra], capture_output=True, text=True)
+
+    PR = ("--status", "completed-pr-opened", "--handoff-path", "pr-required", "--branch-pushed", "yes",
+          "--pr-url", "https://example.invalid/pr/1", "--pr-number", "1")
+    BLOCKED = ("--status", "blocked-awaiting-coordinator", "--handoff-path", "blocked-awaiting-coordinator",
+               "--failing-command", "gh pr create", "--blockers-json",
+               '[{"title":"t","type":"task","priority":1,"rationale":"r","unblock_condition":"auth restored"}]')
+
+    def test_not_applicable_gate_is_accepted_and_distinct_from_not_run(self) -> None:
+        result = self.emit("/nonexistent", *self.PR, "--quality-gate", "typecheck=not-applicable")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(report_field(result.stdout, "typecheck"), "not-applicable")
+        self.assertEqual(report_field(result.stdout, "lint"), "not-run")
+
+    def test_documented_route_table_values_are_the_accepted_pairs(self) -> None:
+        doc = (SKILL_ROOT / "references" / "worker-report.md").read_text()
+        rows = re.findall(r"^\| [^|]+ \| `([a-z][a-z-]+)` \| `([a-z][a-z-]+)` \|", doc, re.MULTILINE)
+        self.assertEqual(len(rows), 4)
+        spec = importlib.util.spec_from_file_location("emit_worker_report", EMIT_REPORT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.assertEqual({status for status, _ in rows}, module.VALID_STATUSES)
+        self.assertEqual({handoff for _, handoff in rows}, module.VALID_HANDOFF_PATHS)
+        self.assertIn(("completed-pr-opened", "pr-required"), rows)
+
+    def test_completed_report_defaults_recovery_fields_from_git(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work = self.make_worktree(Path(tmp))
+            result = self.emit(work, *self.PR)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(report_field(result.stdout, "Recovery-State"), "branch-pushed")
+            self.assertEqual(report_field(result.stdout, "Dirty-Worktree"), "no")
+            self.assertEqual(report_field(result.stdout, "Unpushed-Commits"), "no")
+            self.assertEqual(report_field(result.stdout, "Remote-Branch"), "origin/agent/bd-42")
+
+    def test_completed_report_rejects_a_contradictory_recovery_state(self) -> None:
+        result = self.emit("/nonexistent", *self.PR, "--recovery-state", "no-code-changes")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires Recovery-State: branch-pushed", result.stderr)
+
+    def test_blocked_report_reads_local_work_from_git(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work = self.make_worktree(Path(tmp))
+            (work / "f").write_text("2\n")
+            self.git(work, "commit", "-q", "-am", "two")
+            (work / "g").write_text("dirty\n")
+            result = self.emit(work, *self.BLOCKED, "--branch-pushed", "no")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(report_field(result.stdout, "Recovery-State"), "local-only")
+            self.assertEqual(report_field(result.stdout, "Dirty-Worktree"), "yes")
+            self.assertEqual(report_field(result.stdout, "Unpushed-Commits"), "yes")
+
+    def test_pushed_branch_with_local_work_is_local_only_when_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work = self.make_worktree(Path(tmp))
+            (work / "g").write_text("dirty\n")
+            result = self.emit(work, *self.BLOCKED, "--branch-pushed", "yes")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(report_field(result.stdout, "Recovery-State"), "local-only")
+            self.assertEqual(report_field(result.stdout, "Remote-Branch"), "origin/agent/bd-42")
+
+    def test_unpushed_branch_reports_no_remote(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work = self.make_worktree(Path(tmp))
+            self.git(work, "push", "-q", "origin", "--delete", "agent/bd-42")
+            result = self.emit(work, *self.BLOCKED, "--branch-pushed", "no")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(report_field(result.stdout, "Remote-Branch"), "n/a")
+            self.assertEqual(report_field(result.stdout, "Unpushed-Commits"), "unknown")
+            self.assertEqual(report_field(result.stdout, "Recovery-State"), "local-only")
+
+    def test_unreadable_git_state_reports_unknown_not_clean(self) -> None:
+        result = self.emit("/nonexistent", *self.BLOCKED, "--branch-pushed", "no")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(report_field(result.stdout, "Dirty-Worktree"), "unknown")
+        self.assertEqual(report_field(result.stdout, "Remote-Branch"), "n/a")
+        self.assertEqual(report_field(result.stdout, "Recovery-State"), "local-only")
 
 
 if __name__ == "__main__":

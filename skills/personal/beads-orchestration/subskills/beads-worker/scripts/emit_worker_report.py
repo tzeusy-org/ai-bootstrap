@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -27,7 +28,10 @@ VALID_HANDOFF_PATHS = {
 }
 VALID_BRANCH_PUSHED = {"yes", "no"}
 VALID_RECOVERY_STATES = {"branch-pushed", "local-only", "no-code-changes"}
-VALID_GATE_RESULTS = {"pass", "fail", "not-run"}
+# not-run: the repo defines the gate but it did not run (reads as skipped).
+# not-applicable: the repo defines no such gate (e.g. no typecheck for shell).
+VALID_GATE_RESULTS = {"pass", "fail", "not-run", "not-applicable"}
+COMPLETED_STATUSES = {"completed-pr-opened", "completed-direct-merge-candidate"}
 EXPECTED_GATES = ("lint", "typecheck", "tests")
 
 
@@ -48,12 +52,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pr-number", default="n/a")
     parser.add_argument("--base-branch", default="n/a")
     parser.add_argument("--review-reason", default="n/a")
-    parser.add_argument("--recovery-state", default="no-code-changes")
+    parser.add_argument("--recovery-state", help="Default: derived from status, --branch-pushed and git state.")
     parser.add_argument("--resume-condition", default="n/a")
     parser.add_argument("--failing-command", default="n/a")
-    parser.add_argument("--remote-branch", default="n/a")
-    parser.add_argument("--dirty-worktree", default="unknown")
-    parser.add_argument("--unpushed-commits", default="unknown")
+    parser.add_argument("--remote-branch", help="Default: the worktree's upstream, else n/a.")
+    parser.add_argument("--dirty-worktree", choices=("yes", "no", "unknown"), help="Default: from git status.")
+    parser.add_argument("--unpushed-commits", choices=("yes", "no", "unknown"), help="Default: commits ahead of upstream.")
     parser.add_argument("--summary", required=True)
     parser.add_argument("--quality-gate", action="append", default=[])
     parser.add_argument("--changes", action="append", default=[])
@@ -102,6 +106,50 @@ def parse_quality_gates(raw_gates: list[str]) -> dict[str, str]:
     return parsed
 
 
+def git(worktree: str, *argv: str) -> str | None:
+    try:
+        result = subprocess.run(["git", "-C", worktree, *argv], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def git_recovery_facts(worktree: str, branch: str) -> dict[str, str]:
+    """Read dirty/unpushed/remote from the worktree; unknown when git can't say.
+
+    Compares against origin/<branch>, never @{u}: a worktree made with
+    `git worktree add -b agent/<id> <path> origin/main` tracks origin/main.
+    """
+    status = git(worktree, "status", "--porcelain")
+    remote = f"origin/{branch}"
+    exists = status is not None and git(worktree, "rev-parse", "--verify", "--quiet", f"refs/remotes/{remote}") is not None
+    ahead = git(worktree, "rev-list", "--count", f"refs/remotes/{remote}..HEAD") if exists else None
+    return {
+        "dirty_worktree": "unknown" if status is None else ("yes" if status else "no"),
+        "unpushed_commits": "unknown" if ahead is None or not ahead.isdigit() else ("yes" if int(ahead) else "no"),
+        "remote_branch": remote if exists else "n/a",
+    }
+
+
+def default_recovery(args: argparse.Namespace) -> None:
+    """Fill omitted recovery fields from git, so a completed report never claims no-code-changes."""
+    facts = git_recovery_facts(args.worktree_path, args.branch)
+    for field in ("dirty_worktree", "unpushed_commits", "remote_branch"):
+        if getattr(args, field) is None:
+            setattr(args, field, facts[field])
+    if args.recovery_state is None:
+        local_work = "yes" in (args.dirty_worktree, args.unpushed_commits)
+        if args.status == "invalid-runtime-context":
+            args.recovery_state = "no-code-changes"
+        elif args.status in COMPLETED_STATUSES or (args.branch_pushed == "yes" and not local_work):
+            args.recovery_state = "branch-pushed"
+        elif args.dirty_worktree == "no" and args.unpushed_commits == "no":
+            args.recovery_state = "no-code-changes"
+        else:
+            # Unknown git state is treated as local work so recovery looks for it.
+            args.recovery_state = "local-only"
+
+
 def validate_args(args: argparse.Namespace, blockers: list[object]) -> None:
     expected_branch = f"agent/{args.issue_id}"
     args.delivery = None
@@ -134,10 +182,13 @@ def validate_args(args: argparse.Namespace, blockers: list[object]) -> None:
     if args.branch != expected_branch and args.status != "invalid-runtime-context":
         raise ValueError("Branch must match the accepted delivery branch")
 
+    default_recovery(args)
     if args.recovery_state not in VALID_RECOVERY_STATES:
         raise ValueError(
             f"Recovery-State must be one of: {', '.join(sorted(VALID_RECOVERY_STATES))}"
         )
+    if args.status in COMPLETED_STATUSES and args.recovery_state != "branch-pushed":
+        raise ValueError(f"{args.status} requires Recovery-State: branch-pushed")
 
     if args.status == "completed-pr-opened":
         if args.handoff_path != "pr-required":
