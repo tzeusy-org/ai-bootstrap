@@ -37,6 +37,9 @@ As implementation session, own code, focused tests, failure diagnosis and ordina
 corrections. As lifecycle holder, apply the resulting updates yourself at checkpoints;
 dispatched workers instead report to their controller. Renew registry/liveness
 without gratuitous note traffic. Publish useful commits and current recovery state.
+File discovered follow-ups as holder with the per-class dependency wiring in
+[coordinator Step 6](../../beads-coordinator/references/coordinator-loop.md#step-6-land-or-wait-with-explicit-state):
+only a prerequisite blocker blocks this outcome; new behavior links `discovered-from`.
 
 ## Independent review, once per content
 

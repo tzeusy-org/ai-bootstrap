@@ -352,6 +352,16 @@ the event and dependent scope. Do not manufacture a new blocker bead for a wait
 already represented in CI, review or an existing prerequisite. Classify discoveries:
 current-PR correctness stays here; prerequisite blocker gets one canonical owner;
 new behavior goes outside accepted scope; duplicate links existing provenance.
+Create the follow-up first, then wire one edge by class. Only a prerequisite
+blocker serializes the original:
+
+```bash
+bd --actor "$COORDINATOR_ID" dep add <original-id> <new-id>                       # prerequisite blocker
+bd --actor "$COORDINATOR_ID" dep add <new-id> <original-id> --type discovered-from  # new behavior / adjacent idea
+```
+
+`discovered-from` records provenance without blocking either bead; the default
+`blocks` type on a new-behavior follow-up would park the original behind it.
 
 ## Step 7: Per-member reconciliation and safe cleanup
 
