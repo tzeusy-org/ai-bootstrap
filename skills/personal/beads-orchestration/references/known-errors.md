@@ -373,8 +373,7 @@ an explicit method) reappears in other scripts.
 - **Symptom (bd 1.0.4)**: `Error: dolt push requires a local Dolt CLI
   database directory in external-server mode; set BEADS_DOLT_CLI_DIR to the
   local Dolt database path or use a remote type supported by SQL
-  DOLT_PUSH/DOLT_PULL`. It does NOT "safely skip" as the `bd sync` entry
-  above suggests.
+  DOLT_PUSH/DOLT_PULL`. It does NOT safely skip.
 - **Symptom (bd 1.3.1)**: `bd dolt push` prints `Pushing to Dolt remote...
   Push complete.` yet `git ls-remote origin refs/dolt/data` is unchanged, or
   it prints `hint: Updates were rejected because the tip of your current

@@ -8,8 +8,8 @@ bd is the ONLY task tracker — no TodoWrite, TaskCreate, or markdown TODOs;
 `bd remember` for persistent knowledge, never MEMORY.md files. The
 SessionStart hook injects the workflow context (`.beads/PRIME.md`); re-run
 `bd prime` after compaction. Session close is mandatory: file beads for
-follow-ups, run quality gates, then commit, `git pull --rebase`, and `git push` until "up to date with origin" —
-work is NOT done until push succeeds.
+follow-ups, run quality gates, then commit, `git pull --rebase`, and `git
+push` until "up to date with origin" — work is NOT done until push succeeds.
 
 ## Beads Database Topology
 
