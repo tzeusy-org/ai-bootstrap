@@ -40,7 +40,8 @@ Rules:
   any polish on the same claim: improvements nobody can see land are the
   cause of repeated runs.
 - A claim that only the owner's taste can operationalize ("beautiful",
-  "feels right") is a **taste gate**: it goes to the closeout questionnaire
+  "feels right"), after the design bar (th-design) cannot settle it, is a
+  **taste gate**: it goes to the closeout questionnaire
   with concrete samples or a request for a reference, and work on it is not
   ranked on the pursuit's guess.
 - **Stalls.** A claim whose covering beads have stayed open across two runs

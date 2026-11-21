@@ -175,8 +175,9 @@ Dossier + data JSON, beads epic, the owner dossier questionnaire, and a
 memory line — formats and the hold rules in
 [`references/pursuit-deliverables.md`](references/pursuit-deliverables.md).
 Every move bead carries acceptance observable in the product, and the epic
-ends with a bead that re-runs the claim scorecard, so rework surfaces inside
-the epic instead of at the next run.
+ends with a bead that re-runs the claim scorecard once its ranked, non-held
+moves land (held and later-wave moves are scored when they land), so rework
+surfaces inside the epic instead of at the next run.
 The epic and its mandate-grounded move beads are runnable immediately:
 no epic-level `[HOLD]` gate and no owner sign-off to start. Only a
 vision-extending move that needs a doctrine amendment, a move that

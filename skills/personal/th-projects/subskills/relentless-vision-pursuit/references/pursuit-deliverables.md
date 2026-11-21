@@ -70,9 +70,11 @@ The epic and every mandate-grounded move are ready as soon as they are filed.
    comparison probe prefers ours on N of M questions"), never "implemented".
    A bead whose effect cannot be observed yet depends on the bead that
    builds the measure.
-3. The epic's last child is a **scorecard bead**, dependent on the others:
-   re-run the in-use audit and re-score the claims the epic targeted. A
-   claim that did not move reopens work inside the epic, not at the next run.
+3. The epic's last child is a **scorecard bead** that depends on the ranked,
+   non-held moves for the claims the epic targets (held and later-wave moves
+   are excluded and re-scored when they land or at the next run): re-run the
+   in-use audit and re-score those claims. For a claim that did not move, the
+   scorecard bead files follow-up move beads under the epic, not at the next run.
 4. Hold only moves with a real hard gate: a vision-extending move needs its
    doctrine amendment, a contract-changing move needs its waiver, and a move
    on a taste-gated claim needs the owner's reference. For

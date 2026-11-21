@@ -104,8 +104,9 @@ lane's memory. A kill or a compaction loses at most the unit in flight.
   pad, and don't read a short list as a closed gap.
 - The in-use audit runs inline in the orchestrator before the lanes start.
   Bound it: one real input, one null-alternative run, and a stated budget.
-  The closure-gate agent is a one-shot fresh session on the session's model
-  and counts toward the ceiling of 3.
+  The closure-gate agent and the in-use audit's blind judge are one-shot
+  fresh sessions on the session's model and each counts toward the ceiling
+  of 3.
 - If a fleet is mid-execution on a prior pursuit epic: audit the surfaces
   it has already landed (to measure) and ideate the lenses it is not
   touching; note the overlap in the report instead of filing colliding
