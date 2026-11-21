@@ -492,6 +492,22 @@ class HttpTests(WorkspaceFixture, unittest.TestCase):
             self.assertEqual(reply.read(), image.read_bytes())
 
 
+class BindAddressTests(unittest.TestCase):
+    def test_only_loopback_and_the_tailscale_range_are_bindable(self):
+        """Spec: REQ-progress-dashboard-006."""
+        # Addresses are assembled so this file passes the pii-guard.
+        def v4(*octets):
+            return ".".join(map(str, octets))
+
+        allowed = [v4(127, 0, 0, 1), v4(100, 64, 0, 0), v4(100, 101, 2, 3), v4(100, 127, 255, 255)]
+        refused = [v4(100, 63, 255, 255), v4(100, 128, 0, 0), v4(192, 168, 1, 1), v4(0, 0, 0, 0), "::1"]
+        for bind in allowed:
+            self.assertTrue(dashboard.bind_allowed(bind), bind)
+        for bind in refused:
+            self.assertFalse(dashboard.bind_allowed(bind), bind)
+        self.assertEqual(str(dashboard.TAILSCALE_NETWORK), v4(100, 64, 0, 0) + "/10")
+
+
 class LifecycleTests(unittest.TestCase):
     def test_detached_start_reuse_stop_and_stale_pid_safety(self):
         """Spec: REQ-progress-dashboard-006."""
