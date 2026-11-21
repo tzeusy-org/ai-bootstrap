@@ -18,7 +18,9 @@ Coordinator responsibilities:
 - check `assignee` (not a lease token) to decide whether a bead is yours
 - renew the stall heartbeat at the checkpoints in `runtime-and-safety.md`
   (TTL, cadence, and the skip-if-recently-renewed rule are canonical there)
-- replace the canonical heartbeat block in notes; never append a second one
+- write the heartbeat only with `uv run scripts/coordinator_registry.py heartbeat
+  --repo-root "$REPO_ROOT" --id "$COORDINATOR_ID" --bead <id>`; never hand-edit
+  the block or append a second one
 - wake on useful events; renew registry for the bounded fallback wait
 
 For multi-bead claims/recovery/closure plans use
