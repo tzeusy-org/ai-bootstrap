@@ -41,7 +41,7 @@ var; see [lgtm-credentials](../lgtm-credentials/SKILL.md).
   days, 1-hour forever. `--ago` moves an instant query or a range's end into
   the past (or use PromQL `offset`). Thanos only uses data at resolution
   ≤ step/5, so past 30 days use `--step 25m` or more, past 90 days `5h` or
-  more, or the result is empty.
+  more, or the result may be partial or empty.
 - Loki holds logs sent over OTLP plus Loki's own canary, not Kubernetes pod
   stdout; run `loglabels` for the live label set. For pod logs use
   `kubectl -n <ns> logs` (tze; orca only in its RBAC namespaces).
