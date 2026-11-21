@@ -41,7 +41,9 @@ uv run scripts/coordinator_registry.py heartbeat --repo-root "$REPO_ROOT" \
 It replaces the block in place (collapsing duplicates) or appends it, keeps the
 other notes, skips the write while this id's block is under 5 minutes old
 (`fresh`), and writes under `--if-assignee`, so a bead this id does not hold is
-refused (`not-assignee`, exit 13). bd has no compare-and-swap on notes; the
+refused (`not-assignee`, exit 13). Notes carrying a heartbeat tag outside one
+canonical block are refused (`malformed-heartbeat`) for a human or recovery pass
+to repair, never rewritten around. bd has no compare-and-swap on notes; the
 helper re-reads before writing and retries on change, which narrows the window
 for losing a concurrent notes edit but cannot close it. The block it writes:
 

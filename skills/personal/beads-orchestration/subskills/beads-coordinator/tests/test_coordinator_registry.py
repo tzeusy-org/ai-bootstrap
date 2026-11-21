@@ -198,6 +198,34 @@ class PlanHeartbeatTests(unittest.TestCase):
                 self.assertEqual(registry.plan_heartbeat(notes, ID, now=NOW, min_age=FIVE)[0], "write")
 
 
+class MalformedHeartbeatTests(unittest.TestCase):
+    def test_stray_or_broken_tags_are_refused_without_a_write(self) -> None:
+        cases = {
+            "unclosed before a valid block": "intro\n[beads-heartbeat]\nowner=x\nIMPORTANT NOTE\n\n" + block() + "\nafter",
+            "unclosed with its own timestamp": "[beads-heartbeat]\nowner=x\nlast_heartbeat_at=2026-11-21T11:59:00Z\n",
+            "prose mention": "see [beads-heartbeat] ... [/beads-heartbeat] here",
+            "stray closing tag": "done [/beads-heartbeat]",
+        }
+        for name, notes in cases.items():
+            with self.subTest(name=name):
+                self.assertEqual(registry.plan_heartbeat(notes, ID, now=NOW, min_age=FIVE), ("malformed", None))
+
+    def test_crlf_canonical_block_is_replaced(self) -> None:
+        notes = "head\r\n" + block(at="2026-11-21T11:00:00Z").replace("\n", "\r\n") + "\r\ntail"
+        action, updated = registry.plan_heartbeat(notes, ID, now=NOW, min_age=FIVE)
+        self.assertEqual(action, "write")
+        self.assertEqual(updated.count("[beads-heartbeat]"), 1)
+        self.assertIn("last_heartbeat_at=2026-11-21T12:00:00Z", updated)
+        self.assertTrue(updated.startswith("head") and updated.endswith("tail"))
+
+    def test_command_refuses_malformed_notes(self) -> None:
+        fake = FakeBd(shown("[beads-heartbeat]\nowner=x\n"))
+        with mock.patch.object(registry.subprocess, "run", fake), mock.patch.object(registry, "sleep"):
+            payload, code = registry.heartbeat(Path("/repo"), ID, "aib-1", now=NOW, min_age=FIVE)
+        self.assertEqual((code, payload["error"]), (1, "malformed-heartbeat"))
+        self.assertEqual(len(fake.calls), 1)
+
+
 class HeartbeatCommandTests(unittest.TestCase):
     def run_heartbeat(self, fake: FakeBd) -> tuple[dict[str, object], int]:
         with mock.patch.object(registry.subprocess, "run", fake), mock.patch.object(registry, "sleep"):

@@ -85,7 +85,12 @@ TRANSIENT_MARKERS = (
     "invalid connection",
 )
 sleep = time.sleep
-HEARTBEAT_BLOCK_RE = re.compile(r"\n*\[beads-heartbeat\].*?\[/beads-heartbeat\]\n?", re.DOTALL)
+# Only the exact canonical shape is a block; anything else carrying the tag is
+# malformed and refused, so a stray tag never swallows neighbouring notes.
+HEARTBEAT_BLOCK_RE = re.compile(
+    r"\n*\[beads-heartbeat\][ \t]*\r?\nowner=\S+[ \t]*\r?\nlast_heartbeat_at=\S+[ \t]*\r?\n\[/beads-heartbeat\][ \t]*(?:\r?\n|$)"
+)
+HEARTBEAT_TAG_RE = re.compile(r"\[/?beads-heartbeat\]")
 HEARTBEAT_FIELDS_RE = re.compile(
     r"\[beads-heartbeat\]\s*owner=(\S+)\s*last_heartbeat_at=(\S+)\s*\[/beads-heartbeat\]"
 )
@@ -185,13 +190,17 @@ def heartbeat_block(coordinator_id: str, now: datetime) -> str:
 
 
 def plan_heartbeat(notes: str | None, coordinator_id: str, *, now: datetime, min_age: timedelta) -> tuple[str, str | None]:
-    """Return ("fresh", None) or ("write", new_notes) with exactly one heartbeat block.
+    """Return ("fresh", None), ("malformed", None) or ("write", new_notes).
 
-    Other note content is preserved in order; the block goes where the first
-    existing block was, or at the end.
+    A write leaves exactly one canonical block. Other note content is preserved
+    in order; the block goes where the first existing block was, or at the end.
+    Any heartbeat tag outside a canonical block is "malformed": rewriting around
+    it would either drop notes or leave a stale block that cleanup reads first.
     """
     notes = notes or ""
     blocks = list(HEARTBEAT_BLOCK_RE.finditer(notes))
+    if len(HEARTBEAT_TAG_RE.findall(notes)) != 2 * len(blocks):
+        return "malformed", None
     if len(blocks) == 1:
         fields = HEARTBEAT_FIELDS_RE.search(blocks[0].group(0))
         last = parse_time(fields.group(2)) if fields else None
@@ -286,6 +295,8 @@ def heartbeat(repo_root: Path, coordinator_id: str, bead: str, *, now: datetime,
         action, notes = plan_heartbeat(record.get("notes"), coordinator_id, now=now, min_age=min_age)
         if action == "fresh":
             return {"action": "fresh", "id": coordinator_id, "bead": bead}, 0
+        if action == "malformed":
+            return {"action": "refused", "error": "malformed-heartbeat", "id": coordinator_id, "bead": bead}, 1
         latest, error = read_notes(bead, repo_root, coordinator_id)
         if error:
             return {**error, "bead": bead}, 1

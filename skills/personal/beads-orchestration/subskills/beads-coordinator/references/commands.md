@@ -74,7 +74,7 @@ default coordinator views.
 | Check PR state | `gh pr view <number> --json state,mergedAt,createdAt` |
 | Find PR by worker branch | `gh pr list --state open --head "agent/<id>" --json number,url,createdAt` |
 | Create issue | `bd --actor "$COORDINATOR_ID" create "<title>" --description "<desc>" -t <type> -p <priority> [--parent <epic-id>] --json` |
-| Claim issue | `bd --actor "$COORDINATOR_ID" update <id> --claim --json` (atomic; sets `assignee` + `in_progress`), then write the stall heartbeat note |
+| Claim issue | `bd --actor "$COORDINATOR_ID" update <id> --claim --json` (atomic; sets `assignee` + `in_progress`), then `coordinator_registry.py heartbeat --bead <id>` |
 | Release issue | `bd --actor "$COORDINATOR_ID" unclaim <id> --reason "<why>"` (clears the assignee and reopens it) |
 | Adopt a dead peer's bead | guarded `bd --actor "$COORDINATOR_ID" update <id> --if-assignee '<old>' --if-status <status> …`; exit 13 means a peer won (`runtime-and-safety.md` → "Adopt the dead, guarded") |
 | Evaluate outcome closure | Compare original accepted outcome and runtime/activation proof; child counts alone never authorize closure |
