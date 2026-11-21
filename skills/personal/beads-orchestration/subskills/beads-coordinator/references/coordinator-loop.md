@@ -373,8 +373,14 @@ the event and dependent scope. Do not manufacture a new blocker bead for a wait
 already represented in CI, review or an existing prerequisite. Classify discoveries:
 current-PR correctness stays here; prerequisite blocker gets one canonical owner;
 new behavior goes outside accepted scope; duplicate links existing provenance.
-Create the follow-up first, then wire one edge by class. Only a prerequisite
-blocker serializes the original:
+Create the follow-up first, then wire one edge by class. A follow-up enters
+the shared queue only with a complete packet: run
+`uv run scripts/check_packet.py --repo-root "$REPO_ROOT" <new-id>` and, unless it
+reports `packet_complete`, add `needs-shaping` so the ranker holds it for
+[beads-writer](../../beads-writer/SKILL.md) instead of the next lane claiming
+it. A packet-complete follow-up is ordinary ready work for any lane, its author
+included; independence comes from review, not from who implements. Only a
+prerequisite blocker serializes the original:
 
 ```bash
 bd --actor "$COORDINATOR_ID" dep add <original-id> <new-id>                       # prerequisite blocker
