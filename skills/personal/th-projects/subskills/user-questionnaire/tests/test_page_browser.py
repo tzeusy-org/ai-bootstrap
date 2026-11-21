@@ -293,8 +293,20 @@ def _tap_bar(page, selector: str) -> None:
 
 
 def _at_top(page, element_id: str) -> None:
-    """Wait until the element sits under the top bar, where a jump puts it."""
-    page.wait_for_function(f"Math.abs(document.getElementById('{element_id}').getBoundingClientRect().top - 72) < 4")
+    """Wait until the element sits under the top bar, where a jump puts it.
+
+    The last section may be too short to reach the bar: the page then stops at
+    its bottom, which counts when the element starts below the bar and is
+    fully in view. Page height depends on the browser's font metrics.
+    """
+    page.wait_for_function(
+        f"""(() => {{
+          const box = document.getElementById('{element_id}').getBoundingClientRect();
+          if (Math.abs(box.top - 72) < 4) return true;
+          const atBottom = Math.ceil(scrollY) >= document.documentElement.scrollHeight - innerHeight - 1;
+          return atBottom && box.top > 68 && box.bottom <= innerHeight + 1;
+        }})()"""
+    )
 
 
 def _answer_all(served, ids) -> None:
