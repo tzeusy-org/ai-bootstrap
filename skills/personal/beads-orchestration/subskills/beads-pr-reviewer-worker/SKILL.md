@@ -311,6 +311,11 @@ MERGE_JSON=$(python3 "<loaded beads-pr-reviewer-worker package>/scripts/evaluate
   --pr-number "${PR_NUMBER}")
 ```
 
+   Every read targets `OWNER/REPO` explicitly, so the cwd's repository never
+   answers. A returned PR whose URL or number is not the requested one exits
+   with `error_code: pr-identity-mismatch`: treat it as blocked, never as
+   readiness or merged evidence.
+
 2. Reuse substantive review and test evidence according to
    [delivery policy](../../references/delivery-model.md): record source/tree
    scope, diff and relevant base assumptions. Reuse unchanged content after

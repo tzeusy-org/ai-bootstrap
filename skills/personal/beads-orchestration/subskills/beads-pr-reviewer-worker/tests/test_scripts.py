@@ -128,24 +128,38 @@ def _make_gh_evaluate(bin_dir: FakeBinDir, *, pr_state: str = "OPEN",
                        checks_error: str | None = None,
                        merge_queue_rules: int | None = None,
                        label_pages: list | None = None,
-                       labels_error: bool = False) -> None:
+                       labels_error: bool = False,
+                       returned_url: str | None = None) -> None:
     """Configure a fake `gh` for evaluate_merge_readiness tests.
 
     ``merge_queue_rules`` is the number of ``merge_queue`` rules the branch
     rules endpoint reports; ``None`` makes that endpoint fail (unknown).
+
+    ``gh pr view``/``gh pr checks`` model gh's repository resolution: with
+    ``--repo OWNER/REPO`` they answer for that repository; without it they
+    answer for the cwd's repository (``cwd/other``), whose PR 42 is an
+    unrelated, long-merged PR with green checks (the aib-6m4 incident).
+    ``returned_url`` forces the URL a scoped ``gh pr view`` reports.
     """
     thread_nodes = json.dumps([{"isResolved": False}] * unresolved +
                               [{"isResolved": True}] * 0)
-    pr_json = json.dumps({
+    cwd_pr_json = json.dumps({
+        "state": "MERGED", "isDraft": False, "mergeStateStatus": "UNKNOWN",
+        "reviewDecision": "APPROVED", "mergedAt": "2026-02-13T00:00:00Z",
+        "url": "https://github.com/cwd/other/pull/42", "number": 42,
+        "baseRefName": "main", "headRefName": "unrelated",
+    })
+    pr_fields = {
         "state": pr_state,
         "isDraft": is_draft,
         "mergeStateStatus": merge_state,
         "reviewDecision": review_decision,
         "mergedAt": None,
-        "url": "https://github.com/owner/repo/pull/42",
+        "number": 42,
         "baseRefName": "main",
         "headRefName": "agent/test-42",
-    })
+    }
+    pr_fields_json = json.dumps(pr_fields)
     if check_states is None:
         checks_json = json.dumps([{"state": "SUCCESS"}])
     else:
@@ -162,12 +176,21 @@ import json
 
 argv = sys.argv[1:]
 cmd = ' '.join(argv)
+scoped = argv[argv.index('--repo') + 1] if '--repo' in argv else None
 
 if 'pr' in argv and 'view' in argv and '--json' in argv:
-    print({repr(pr_json)})
+    if scoped is None:
+        print({repr(cwd_pr_json)})
+        sys.exit(0)
+    pr = json.loads({repr(pr_fields_json)})
+    pr["url"] = {returned_url!r} or "https://github.com/" + scoped + "/pull/42"
+    print(json.dumps(pr))
     sys.exit(0)
 
 if 'pr' in argv and 'checks' in argv:
+    if scoped is None:
+        print(json.dumps([{{"state": "SUCCESS"}}]))
+        sys.exit(0)
     {checks_error_body or f'print({repr(checks_json)}); sys.exit(0)'}
 
 if 'api' in argv and any(a.startswith('repos/') and '/rules/branches/' in a for a in argv):
@@ -199,6 +222,50 @@ sys.exit(1)
 
 
 class EvaluateMergeReadinessTests(unittest.TestCase):
+    def test_wrong_cwd_with_colliding_pr_number_reads_requested_repo(self) -> None:
+        # aib-6m4: run from another checkout whose PR 42 is long merged; the
+        # requested PR must be read, not the cwd's colliding number.
+        with FakeBinDir() as fbd:
+            _make_gh_evaluate(fbd, check_states=["FAILURE"])
+            result = run_script("evaluate_merge_readiness.py",
+                                ["--owner", "owner", "--repo", "repo", "--pr-number", "42"],
+                                env=fbd.env())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["state"], "OPEN")
+        self.assertIsNone(payload["merged_at"])
+        self.assertEqual(payload["pr_url"], "https://github.com/owner/repo/pull/42")
+        self.assertFalse(payload["merge_ok"])
+        self.assertIn("required_non_green=1", payload["reasons"])
+
+    def test_returned_pr_identity_mismatch_fails_closed(self) -> None:
+        mismatches = [
+            "https://github.com/cwd/other/pull/42",
+            "https://github.com/owner/repo/pull/43",
+            "https://github.com/owner/repo-fork/pull/42",
+            "",
+        ]
+        for url in mismatches:
+            with self.subTest(url=url), FakeBinDir() as fbd:
+                _make_gh_evaluate(fbd, review_decision="APPROVED", returned_url=url or "x")
+                result = run_script("evaluate_merge_readiness.py",
+                                    ["--owner", "owner", "--repo", "repo", "--pr-number", "42"],
+                                    env=fbd.env())
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                error = json.loads(result.stderr)
+                self.assertFalse(error["ok"])
+                self.assertEqual(error["error_code"], "pr-identity-mismatch")
+
+    def test_repository_identity_match_is_case_insensitive(self) -> None:
+        with FakeBinDir() as fbd:
+            _make_gh_evaluate(fbd, review_decision="APPROVED",
+                              returned_url="https://github.com/Owner/Repo/pull/42")
+            result = run_script("evaluate_merge_readiness.py",
+                                ["--owner", "owner", "--repo", "repo", "--pr-number", "42"],
+                                env=fbd.env())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(json.loads(result.stdout)["merge_ok"])
+
     def test_merge_queue_unknown_when_rules_endpoint_fails(self) -> None:
         with FakeBinDir() as fbd:
             _make_gh_evaluate(fbd)
