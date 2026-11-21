@@ -85,6 +85,9 @@ scratch/
 # creating one never edits this tracked file.
 .worktrees/
 
+# bd lock file written at the repo root
+.beads.gate.lock
+
 # bv (beads viewer) local config and caches
 .bv/
 

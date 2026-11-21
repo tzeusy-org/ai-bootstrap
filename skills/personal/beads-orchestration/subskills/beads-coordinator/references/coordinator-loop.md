@@ -372,7 +372,8 @@ assignee checks; never clear foreign or pre-existing claims as compensation.
 A failed bootstrap with useful work gets recovery, not deletion. Keep published
 branches and local-only work. Remove worktrees/branches only after verifying
 clean state, no unpublished commits, no pending correction and completed/handoff
-recovery receipts. Never delete unrelated stashes or worktrees.
+recovery receipts, with plain `git worktree remove <path>` (never `bd worktree
+remove`). Never delete unrelated stashes or worktrees.
 
 ## Step 8: Event-driven continuation and report
 

@@ -336,8 +336,8 @@ troubleshooting steps instead. Use `bd dolt status`, `bd version`, and
   worktree paths were stripped.
 - **Cause**: the helper rewrites the worktree ignore block instead of preserving
   surrounding comments byte-for-byte.
-- **Workaround**: for cleanup of Rust/code worktrees that were created with
-  `git worktree add`, prefer plain `git worktree remove <path>` plus explicit
+- **Workaround**: for every agent worktree (all are created with `git worktree
+  add`), use plain `git worktree remove <path>` plus explicit
   `git branch -D agent/<id>` and remote-branch cleanup after bead closure. If
   `bd worktree remove` was already used, inspect `git diff -- .gitignore` and
   restore comment-only churn unless the ignore entries themselves changed.
