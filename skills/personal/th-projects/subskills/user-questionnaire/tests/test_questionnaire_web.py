@@ -105,10 +105,90 @@ def test_completion_requires_every_answer_a_described_edit_and_the_apply_choice(
         web.record_completion(answers, ids, {"apply_now": "yes"}, "t")
     web.record_completion(answers, ids, {"apply_now": False, "completed": True}, "t")
     assert answers["completed_at"] and answers["apply_now"] is False
-    with pytest.raises(web.AnswerError, match="reopen"):
-        web.record_answer(answers, OPTIONS, {"id": "dec-auth", "kind": "pick", "choice": "A"}, "t", "d")
-    web.record_completion(answers, ids, {"completed": False}, "t")
-    assert answers["completed_at"] is None and "completed_actor" not in answers
+    assert [s["seq"] for s in answers["submissions"]] == [1]
+
+
+def test_repeat_submissions_snapshot_each_change_and_refuse_an_empty_one(web, packet):
+    answers = web.empty_answers(packet)
+    ids = set(OPTIONS)
+    web.record_answer(answers, OPTIONS, {"id": "dec-auth", "kind": "pick", "choice": "A"}, "t", "d")
+    web.record_completion(answers, ids, {"apply_now": False, "completed": True}, "t")
+    with pytest.raises(web.AnswerError, match="nothing changed"):
+        web.record_completion(answers, ids, {"completed": True}, "t")
+    # Answers stay editable after a submit; the snapshot keeps what was sent.
+    web.record_answer(answers, OPTIONS, {"id": "dec-auth", "kind": "pick", "choice": "B", "note": "on reflection"}, "t", "d")
+    assert answers["submissions"][0]["items"]["dec-auth"]["choice"] == "A"
+    assert web.submitted_items(answers)["dec-auth"]["choice"] == "A", "drafts after a submit are not yet submitted"
+    web.record_completion(answers, ids, {"completed": True}, "t")
+    assert [s["seq"] for s in answers["submissions"]] == [1, 2]
+    web.record_completion(answers, ids, {"completed": False}, "t")  # older pages' reopen is a no-op
+    assert answers["completed_at"]
+
+
+def _submit(web, answers, item_answers: dict, apply_now: bool = False) -> None:
+    opts = {"dec-auth": {"A", "B"}, "dec-two": {"A", "B"}}
+    for item_id, body in item_answers.items():
+        web.record_answer(answers, opts, {"id": item_id, **body}, "t", "d")
+    web.record_completion(answers, set(answers["items"]), {"apply_now": apply_now, "completed": True}, "t")
+
+
+def test_submission_delta_lists_only_changed_items_and_merges_undelivered_submits(web, packet):
+    answers = web.empty_answers(packet)
+    order = ["dec-auth", "dec-two"]
+    assert web.submission_delta(answers, 0, order) is None
+    _submit(web, answers, {"dec-auth": {"kind": "pick", "choice": "A"}, "dec-two": {"kind": "hold", "note": "later"}})
+    first = web.submission_delta(answers, 0, order)
+    assert list(first["changed"]) == order and first["apply_now"] is False and first["unchanged"] == 0
+    assert web.submission_delta(answers, 1, order) is None
+    _submit(web, answers, {"dec-two": {"kind": "pick", "choice": "B"}})
+    _submit(web, answers, {"dec-two": {"kind": "pick", "choice": "B", "note": "fine"}}, apply_now=True)
+    delta = web.submission_delta(answers, 1, order)
+    assert delta["seq"] == 3 and delta["since"] == 1 and delta["collapsed"] == 2
+    assert delta["changed"] == {"dec-two": {"kind": "pick", "choice": "B", "note": "fine", "was": "hold"}}
+    assert delta["apply_now"] is True and delta["unchanged"] == 1
+    _submit(web, answers, {"dec-auth": {"kind": "pick", "choice": "B"}}, apply_now=True)
+    assert "apply_now" not in web.submission_delta(answers, 3, order), "an unchanged apply answer is omitted"
+
+
+def test_watch_delivers_each_submission_once_as_a_delta(web, packet, state_dir, capsys):
+    answers = web.empty_answers(packet)
+    _submit(web, answers, {"dec-auth": {"kind": "pick", "choice": "A"}})
+    web.save_answers(state_dir, answers)
+    argv = ["watch", str(packet), "--state-dir", str(state_dir), "--interval", "0.05"]
+    assert web.main(argv) == 0
+    out = capsys.readouterr().out
+    delta = json.loads(out.splitlines()[0].removeprefix("QUESTIONNAIRE_SUBMISSION "))
+    assert delta["seq"] == 1 and list(delta["changed"]) == ["dec-auth"]
+    assert web.main(argv + ["--timeout", "1"]) == 3, "an already-delivered submission does not poke again"
+    capsys.readouterr()
+    answers = web.load_answers(state_dir, packet)
+    _submit(web, answers, {"dec-auth": {"kind": "reject", "note": "no"}})
+    web.save_answers(state_dir, answers)
+    assert web.main(argv) == 0
+    delta = json.loads(capsys.readouterr().out.splitlines()[0].removeprefix("QUESTIONNAIRE_SUBMISSION "))
+    assert delta["since"] == 1 and delta["changed"]["dec-auth"] == {"kind": "reject", "note": "no", "was": "pick A"}
+
+
+def test_watch_ingest_writes_the_packet_and_reports_one_line(web, packet, state_dir, capsys):
+    answers = web.empty_answers(packet)
+    _submit(web, answers, {"dec-auth": {"kind": "edit", "choice": "A minus the migration"}})
+    answers["packet_sha256"] = web.packet_digest(packet)
+    web.save_answers(state_dir, answers)
+    assert web.main(["watch", str(packet), "--state-dir", str(state_dir), "--ingest"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 2 and lines[0].startswith("QUESTIONNAIRE_SUBMISSION ")
+    assert json.loads(lines[1].removeprefix("QUESTIONNAIRE_INGEST ")) == {"written": True, "needs_rework": ["dec-auth"]}
+    assert "**Decision state:** Needs-rework" in packet.read_text(encoding="utf-8")
+
+
+def test_ingest_uses_the_latest_submission_not_later_drafts(web, packet, state_dir):
+    answers = web.empty_answers(packet)
+    _submit(web, answers, {"dec-auth": {"kind": "pick", "choice": "A"}})
+    web.record_answer(answers, {"dec-auth": {"A", "B"}}, {"id": "dec-auth", "kind": "pick", "choice": "B"}, "t", "d")
+    answers["packet_sha256"] = web.packet_digest(packet)
+    web.save_answers(state_dir, answers)
+    assert web.main(["ingest", str(packet), "--state-dir", str(state_dir)]) == 0
+    assert "- Choice: A" in packet.read_text(encoding="utf-8")
 
 
 # ── ingest ───────────────────────────────────────────────────────────────────

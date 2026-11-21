@@ -13,6 +13,7 @@ Subcommands
   serve   <packet.md>  validate, start (or reuse) a background server; print the URL
   render  <packet.md>  write a read-only preview page to stdout or --out (no server)
   status  <packet.md>  print answer progress; exit 0 only when submitted
+  watch   <packet.md>  block until the owner submits; print only what changed since the last delivery
   ingest  <packet.md>  write recorded answers into the packet markdown
   stop    <packet.md>  stop the background server for this packet
 
@@ -22,6 +23,12 @@ find it from the packet alone: answers.json, server.json, server.log.
 answers.json on disk is the only copy of the answers. The server and `ingest`
 each read-modify-write it under one advisory file lock (answers.lock), so a
 running server and a concurrent ingest never lose each other's writes.
+
+The owner may submit more than once. Each submit appends a numbered snapshot
+to ``submissions``; answers given after a submit are drafts until the next one.
+``watch`` is how a waiting agent session gets poked: run it as a background
+command, and it exits when a submission newer than ``delivered_seq`` exists,
+printing only the items that differ from the last delivered snapshot.
 
 The printed URL is https through `tailscale serve` when the node holds
 Tailscale HTTPS certificates (bare *.ts.net names are HSTS-preloaded, so a
@@ -96,6 +103,8 @@ def empty_answers(packet: Path) -> dict[str, Any]:
         "items": {},
         "completed_at": None,
         "apply_now": None,
+        "submissions": [],
+        "delivered_seq": 0,
     }
 
 
@@ -136,9 +145,8 @@ def record_answer(
     """Apply one ``/answer`` request: set an item's answer, or clear it with ``kind: null``.
 
     ``options`` maps each item id to the option labels the packet offers for it.
+    Answers stay editable after a submit; they reach the session at the next one.
     """
-    if answers.get("completed_at"):
-        raise AnswerError("review already submitted; reopen it first")
     item_id = body.get("id")
     if item_id not in options:
         raise AnswerError(f"unknown item {item_id!r}")
@@ -164,10 +172,14 @@ def record_answer(
 
 
 def record_completion(answers: dict[str, Any], item_ids: set[str], body: dict[str, Any], actor: str) -> None:
-    """Apply one ``/complete`` request: the apply-offer answer and/or submit/reopen."""
+    """Apply one ``/complete`` request: the apply-offer answer and/or a submit.
+
+    Each submit appends a numbered snapshot of the answers; a submit with
+    nothing changed since the previous one is refused, so every snapshot is a
+    real delta. ``completed: false`` is accepted from older pages and ignored:
+    answers no longer lock on submit.
+    """
     if "apply_now" in body:
-        if answers.get("completed_at"):
-            raise AnswerError("review already submitted; reopen it first")
         if not isinstance(body["apply_now"], bool):
             raise AnswerError("apply_now must be true or false")
         answers["apply_now"] = body["apply_now"]
@@ -181,11 +193,73 @@ def record_completion(answers: dict[str, Any], item_ids: set[str], body: dict[st
                 raise AnswerError(f"describe the edited option for: {', '.join(empty_edits)}")
             if not isinstance(answers.get("apply_now"), bool):
                 raise AnswerError("answer the apply question first")
-            answers["completed_at"] = now_iso()
+            snapshot = {"apply_now": answers["apply_now"], "items": json.loads(json.dumps(answers["items"]))}
+            submissions = answers.setdefault("submissions", [])
+            if submissions and _same_snapshot(submissions[-1], snapshot):
+                raise AnswerError("nothing changed since the last submission")
+            at = now_iso()
+            submissions.append({"seq": len(submissions) + 1, "at": at, "actor": actor, **snapshot})
+            answers["completed_at"] = at
             answers["completed_actor"] = actor
-        else:
-            answers["completed_at"] = None
-            answers.pop("completed_actor", None)
+
+
+def _answer_key(answer: dict[str, Any] | None) -> tuple[str, str, str] | None:
+    return (answer["kind"], answer.get("choice") or "", answer.get("note") or "") if answer else None
+
+
+def _same_snapshot(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    ids = set(a["items"]) | set(b["items"])
+    return a.get("apply_now") == b.get("apply_now") and all(
+        _answer_key(a["items"].get(i)) == _answer_key(b["items"].get(i)) for i in ids
+    )
+
+
+def submitted_items(answers: dict[str, Any]) -> dict[str, Any]:
+    """The answers as last submitted; answers from before multi-submit (no snapshots) count whole."""
+    submissions = answers.get("submissions") or []
+    return submissions[-1]["items"] if submissions else answers["items"]
+
+
+def submission_delta(answers: dict[str, Any], since: int, order: list[str]) -> dict[str, Any] | None:
+    """What the newest submission changes relative to submission ``since`` (0: nothing delivered yet).
+
+    Only differing items are listed, with their new answer; unchanged items are
+    counted, never repeated. None when no submission is newer than ``since``.
+    """
+    submissions = answers.get("submissions") or []
+    if not submissions or submissions[-1]["seq"] <= since:
+        return None
+    latest = submissions[-1]
+    base = next((s for s in submissions if s["seq"] == since), {"apply_now": None, "items": {}})
+    rank = {item_id: n for n, item_id in enumerate(order)}
+    ids = sorted(set(base["items"]) | set(latest["items"]), key=lambda i: (rank.get(i, len(rank)), i))
+    changed: dict[str, Any] = {}
+    cleared: list[str] = []
+    for item_id in ids:
+        old, new = base["items"].get(item_id), latest["items"].get(item_id)
+        if _answer_key(old) == _answer_key(new):
+            continue
+        if new is None:
+            cleared.append(item_id)
+            continue
+        entry = {"kind": new["kind"]}
+        if new.get("choice"):
+            entry["choice"] = new["choice"]
+        if new.get("note"):
+            entry["note"] = new["note"]
+        if old is not None:
+            entry["was"] = old["kind"] + (f" {old['choice']}" if old["kind"] == "pick" else "")
+        changed[item_id] = entry
+    delta: dict[str, Any] = {"seq": latest["seq"], "since": since, "at": latest["at"]}
+    if latest["seq"] - since > 1:
+        delta["collapsed"] = latest["seq"] - since  # several submits since the last delivery, merged
+    if base.get("apply_now") != latest["apply_now"]:
+        delta["apply_now"] = latest["apply_now"]
+    delta["changed"] = changed
+    if cleared:
+        delta["cleared"] = cleared
+    delta["unchanged"] = len(ids) - len(changed) - len(cleared)
+    return delta
 
 
 # ── server ────────────────────────────────────────────────────────────────────
@@ -523,6 +597,7 @@ def progress(packet: Path, state_dir: Path) -> dict[str, Any]:
         "packet": str(packet), "state_dir": str(state_dir), "total": len(ids), "answered": len(answered),
         "unanswered": [i for i in ids if i not in answers["items"]],
         "completed_at": answers.get("completed_at"), "apply_now": answers.get("apply_now"),
+        "submissions": len(answers.get("submissions") or []), "delivered_seq": answers.get("delivered_seq", 0),
         "packet_changed": answers.get("packet_sha256") != packet_digest(packet),
         "server": read_server_info(state_dir) is not None,
         "kinds": {k: sum(1 for i in answered if answers["items"][i]["kind"] == k) for k in sorted(STATE_FOR_KIND)},
@@ -540,6 +615,44 @@ def cmd_status(args: argparse.Namespace) -> int:
         time.sleep(min(30, max(1, deadline - time.time())))
     print(json.dumps(p, indent=2))
     return 0 if p["completed_at"] else 3
+
+
+def cmd_watch(args: argparse.Namespace) -> int:
+    """Block until a submission newer than the last delivered one; print its delta and mark it delivered.
+
+    Meant to run as a background command whose exit re-invokes the agent
+    session. The delta is one compact JSON line, so each poke costs only the
+    changes, not the packet. Several submits between deliveries merge into one.
+    """
+    packet = Path(args.packet).expanduser().resolve()
+    state_dir = state_dir_for(packet, args.state_dir)
+    order = [item.id for item in page.parse_packet(packet.read_text(encoding="utf-8")).items]
+    deadline = time.time() + args.timeout if args.timeout else None
+    while True:
+        if (state_dir / "answers.json").exists():
+            with answers_lock(state_dir):
+                answers = load_answers(state_dir, packet)
+                since = 0 if args.all else int(answers.get("delivered_seq") or 0)
+                delta = submission_delta(answers, since, order)
+                ingested: dict[str, Any] | None = None
+                if delta:
+                    answers["delivered_seq"] = delta["seq"]
+                    save_answers(state_dir, answers)
+                    if args.ingest:
+                        _, result = ingest_locked(packet, state_dir)
+                        # The delta already names what changed; report only the outcome.
+                        ingested = {k: result[k] for k in ("error", "written", "needs_rework", "validator_errors") if result.get(k)}
+                        ingested.setdefault("written", False)
+            if delta:
+                compact = {"ensure_ascii": False, "separators": (",", ":")}
+                print("QUESTIONNAIRE_SUBMISSION " + json.dumps(delta, **compact))
+                if ingested is not None:
+                    print("QUESTIONNAIRE_INGEST " + json.dumps(ingested, **compact))
+                return 0
+        if deadline is not None and time.time() >= deadline:
+            print(json.dumps({"seq": None, "timeout": args.timeout}))
+            return 3
+        time.sleep(args.interval)
 
 
 # ── ingest ────────────────────────────────────────────────────────────────────
@@ -638,37 +751,50 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     packet = Path(args.packet).expanduser().resolve()
     state_dir = state_dir_for(packet, args.state_dir)
     with answers_lock(state_dir):
-        return _ingest_locked(args, packet, state_dir)
+        code, result = ingest_locked(packet, state_dir, partial=args.partial, force=args.force, dry_run=args.dry_run)
+    if "error" in result:
+        print(f"ERROR: {result['error']}", file=sys.stderr)
+    else:
+        print(json.dumps(result, indent=2))
+    return code
 
 
-def _ingest_locked(args: argparse.Namespace, packet: Path, state_dir: Path) -> int:
+def ingest_locked(
+    packet: Path, state_dir: Path, *, partial: bool = False, force: bool = False, dry_run: bool = False
+) -> tuple[int, dict[str, Any]]:
+    """Write the latest submission into the packet; the caller holds the answers lock.
+
+    Returns the exit code and a result dict, or ``{"error": …}`` when refused.
+    """
     answers = load_answers(state_dir, packet)
-    if not answers["items"]:
-        print("ERROR: no answers recorded yet", file=sys.stderr)
-        return 3
-    if not answers.get("completed_at") and not args.partial:
-        print("ERROR: review not submitted; pass --partial to ingest answered items anyway", file=sys.stderr)
-        return 3
-    if answers.get("packet_sha256") != packet_digest(packet) and not args.force:
-        print("ERROR: packet changed since the owner started answering; re-check the framing or pass --force", file=sys.stderr)
-        return 4
+    submitted = bool(answers.get("completed_at"))
+    # A submitted review ingests its latest snapshot; drafts after it wait for the next submit.
+    items = answers["items"] if partial or not submitted else submitted_items(answers)
+    snapshot = {**answers, "items": items}
+    if not items:
+        return 3, {"error": "no answers recorded yet"}
+    if not submitted and not partial:
+        return 3, {"error": "review not submitted; pass --partial to ingest answered items anyway"}
+    if answers.get("packet_sha256") != packet_digest(packet) and not force:
+        return 4, {"error": "packet changed since the owner started answering; re-check the framing, then ingest --force"}
     text = packet.read_text(encoding="utf-8")
-    new_text, log = apply_answers_to_packet(text, answers)
+    new_text, log = apply_answers_to_packet(text, snapshot)
     errors = vq.validate_packet(new_text)
-    if new_text != text and not args.dry_run and not errors:
+    if new_text != text and not dry_run and not errors:
         atomic_write(packet, new_text)
         answers["packet_sha256"] = packet_digest(packet)
         answers["ingested_at"] = now_iso()
         save_answers(state_dir, answers)
     result = {
-        "written": bool(new_text != text and not args.dry_run and not errors),
-        "packet": str(packet), "dry_run": args.dry_run, "changes": log, "apply_now": answers.get("apply_now"),
+        "written": bool(new_text != text and not dry_run and not errors),
+        "packet": str(packet), "dry_run": dry_run, "changes": log,
+        "apply_now": (answers.get("submissions") or [answers])[-1].get("apply_now") if submitted else answers.get("apply_now"),
         "completed_at": answers.get("completed_at"),
-        "needs_rework": [i for i, a in answers["items"].items() if a["kind"] == "edit"],
+        "submission": (answers.get("submissions") or [{}])[-1].get("seq") if submitted and not partial else None,
+        "needs_rework": [i for i, a in items.items() if a["kind"] == "edit"],
         "validator_errors": errors,
     }
-    print(json.dumps(result, indent=2))
-    return 1 if errors else 0
+    return (1 if errors else 0), result
 
 
 def cmd_stop(args: argparse.Namespace) -> int:
@@ -715,6 +841,14 @@ def main(argv: list[str] | None = None) -> int:
     common(p)
     p.add_argument("--wait", type=int, default=0, help="poll up to N seconds for submission")
     p.set_defaults(fn=cmd_status)
+
+    p = sub.add_parser("watch", help="block until a new submission; print only its changes (exit 0), or 3 on --timeout")
+    common(p)
+    p.add_argument("--timeout", type=int, default=0, help="give up after N seconds (default: wait indefinitely)")
+    p.add_argument("--interval", type=float, default=2.0, help="poll interval in seconds")
+    p.add_argument("--all", action="store_true", help="diff against nothing, re-delivering every answer of the newest submission")
+    p.add_argument("--ingest", action="store_true", help="also write the submission into the packet and print a one-line outcome")
+    p.set_defaults(fn=cmd_watch)
 
     p = sub.add_parser("ingest", help="write answers into the packet's owner decision records")
     common(p)

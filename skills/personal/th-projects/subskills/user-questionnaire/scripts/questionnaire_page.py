@@ -550,7 +550,6 @@ FINAL_HTML = """
   </fieldset>
   <div class="submit-row">
     <button type="button" class="primary" id="submit">Submit review</button>
-    <button type="button" class="chip-btn" id="reopen" hidden>Reopen to change answers</button>
     <span class="save" id="final-status" role="status" aria-live="polite"></span>
   </div>
 </section>"""

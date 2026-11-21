@@ -193,21 +193,27 @@ def test_owner_text_with_script_markup_cannot_disable_the_page(browser, served):
     context.close()
 
 
-def test_submit_requires_every_answer_and_the_apply_choice_then_locks(page, served):
+def test_submit_requires_every_answer_and_the_apply_choice_then_allows_resubmitting_changes(page, served):
     page.click(_opt("dec-auth", "A"))
     page.click(_opt("dec-two", "B"))
     page.wait_for_function("document.querySelector('#progress-text').textContent === '2 of 2 answered'")
     page.wait_for_function("!document.querySelector('#item-dec-two .save').textContent.includes('Saving')")
     assert page.is_disabled("#submit")  # apply question unanswered
-    assert not page.is_visible("#reopen")
     assert not page.is_visible("#item-dec-two .retry")
     page.click("label.choice:has(input[value=false])")
     page.wait_for_function("!document.querySelector('#submit').disabled")
     page.click("#submit")
     page.wait_for_selector("#final.is-done")
-    assert page.is_disabled(_opt("dec-auth", "B"))
+    assert page.is_disabled("#submit"), "nothing changed since the submission"
     saved = _saved(served)
     assert saved["completed_at"] and saved["apply_now"] is False
+    page.click(_opt("dec-auth", "B"))
+    page.wait_for_function("document.querySelector('#submit').textContent === 'Submit changes'")
+    page.wait_for_function("!document.querySelector('#submit').disabled")
+    page.click("#submit")
+    page.wait_for_selector("#final.is-done")
+    saved = _saved(served)
+    assert [s["items"]["dec-auth"]["choice"] for s in saved["submissions"]] == ["A", "B"]
 
 
 def test_j_and_k_move_between_decisions(page, served):
