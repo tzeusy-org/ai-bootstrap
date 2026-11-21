@@ -1,0 +1,4 @@
+interface:
+  display_name: LGTM Access
+  short_description: Query or send homelab telemetry (Prometheus, Loki, Tempo, Alertmanager, OTLP) over Tailscale, with credentials injected safely.
+  default_prompt: Use $lgtm-access to route this homelab observability read or write to the right subskill.
