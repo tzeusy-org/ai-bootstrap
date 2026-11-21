@@ -8,8 +8,7 @@ bd is the ONLY task tracker — no TodoWrite, TaskCreate, or markdown TODOs;
 `bd remember` for persistent knowledge, never MEMORY.md files. The
 SessionStart hook injects the workflow context (`.beads/PRIME.md`); re-run
 `bd prime` after compaction. Session close is mandatory: file beads for
-follow-ups, run quality gates, `bash scripts/beads-mirror-push.sh`, then
-commit, `git pull --rebase`, and `git push` until "up to date with origin" —
+follow-ups, run quality gates, then commit, `git pull --rebase`, and `git push` until "up to date with origin" —
 work is NOT done until push succeeds.
 
 ## Beads Database Topology
@@ -33,12 +32,10 @@ placeholder. On `connection refused`, check that the override is in the shell
 and that no config still says `127.0.0.1`, verify with `bd dolt show`
 (`Server connection OK`; `Mode: per-project` is the normal label here and
 there is no `mysql` client on this host), and never start a local `dolt
-sql-server` as a workaround. The server is the source of truth;
-`scripts/beads-mirror-push.sh` mirrors it to origin `refs/dolt/data` at
-session close, with owner emails rewritten and a PII gate, because bare `bd
-dolt push` pushes a stale local directory instead. Recovery on a fresh clone:
-`bd bootstrap --yes` run inside it with the override unset (it reads the
-remote's `refs/dolt/data` itself). Repo→DB selection
+sql-server` as a workaround. The server is the only beads store: git repos
+are NOT Dolt remotes, so never `bd dolt push/pull`, `bd bootstrap` from a
+git origin, or write `refs/dolt/*` (owner, 2026-11-21). A fresh clone only
+needs the override and `.beads/config.yaml`. Repo→DB selection
 is still per-`.beads/`, so a session here sees only `aib`; address the
 parent's beads explicitly with `bd -C ~/.dotfiles <cmd>`, and cross-prefix
 auto-routing still does NOT work. Known bd errors and workarounds are

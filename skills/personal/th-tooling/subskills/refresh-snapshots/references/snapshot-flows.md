@@ -109,6 +109,7 @@ command, verification, and last-verified date.
 
 - **Snapshot**: `.beads/issues.jsonl` (passive export of the Dolt DB,
   regenerated automatically on `bd` writes; gitignored in these repos).
-- **Refresh**: automatic; remote sync via `bd dolt push` / `bd dolt pull`.
+- **Refresh**: automatic; the shared Dolt server is the only store (no
+  `bd dolt push` / `bd dolt pull`, no git-remote mirror).
 - **Verify**: `bd doctor`.
 - **Last verified**: 2026-06-12

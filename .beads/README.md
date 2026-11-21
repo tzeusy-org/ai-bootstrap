@@ -26,8 +26,7 @@ bd show <issue-id>
 bd update <issue-id> --claim
 bd update <issue-id> --status done
 
-# Sync with Dolt remote
-bd dolt push
+# No sync step: the shared Dolt server is the only store
 ```
 
 ### Working with Issues
