@@ -364,9 +364,8 @@ an explicit method) reappears in other scripts.
 - **Symptom**: `bd sync` fails with `Error: unknown command "sync" for "bd"`.
 - **Cause**: Beads version control is now exposed through `bd vc` and
   `bd dolt`; the old aggregate `sync` command is absent.
-- **Fix**: use `bd dolt commit -m "<message>"` for pending Beads changes,
-  then `bd dolt push` when a Dolt remote is configured. `bd dolt push`
-  safely reports and skips when the local database has no remote.
+- **Fix**: nothing to sync: writes land on the shared Dolt server, the only
+  store. Do not substitute `bd dolt push` (see the next entry).
 - Observed: 2026-07-10, bd 1.0.4.
 
 ## `bd dolt push` in external-server mode errors, or pushes a stale local directory
@@ -374,8 +373,7 @@ an explicit method) reappears in other scripts.
 - **Symptom (bd 1.0.4)**: `Error: dolt push requires a local Dolt CLI
   database directory in external-server mode; set BEADS_DOLT_CLI_DIR to the
   local Dolt database path or use a remote type supported by SQL
-  DOLT_PUSH/DOLT_PULL`. It does NOT "safely skip" as the `bd sync` entry
-  above suggests.
+  DOLT_PUSH/DOLT_PULL`. It does NOT safely skip.
 - **Symptom (bd 1.3.1)**: `bd dolt push` prints `Pushing to Dolt remote...
   Push complete.` yet `git ls-remote origin refs/dolt/data` is unchanged, or
   it prints `hint: Updates were rejected because the tip of your current
@@ -386,50 +384,11 @@ an explicit method) reappears in other scripts.
   a git remote (the server itself holds `dolt_remotes` → origin but has no
   credentials), so the push falls back to whatever local Dolt directory it
   finds.
-- **Fix (2026-10-21)**: never run bare `bd dolt push` here. Run
-  `scripts/beads-mirror-push.sh` (session close, see AGENTS.md step 4): it
-  exports the server with `bd export --include-memories`, rewrites email
-  owners to the creating actor, refuses to continue on a denylist/tailnet/
-  CGNAT hit, syncs an embedded workspace at `~/.tmp/beads-mirror/<db>`
-  (prunes edges and issues the server dropped, then `bd import
-  --allow-stale`), pushes that workspace, and prints `refs/dolt/data: <old>
-  -> <new>` so a no-op is visible. `--dry-run` stops after the PII gate.
-  Recovery on another machine: clone the repo and run `env -u
-  BEADS_DOLT_SERVER_HOST bd bootstrap --yes` inside it; bootstrap reads the
-  remote's `refs/dolt/data` itself, no local fetch needed (verified
-  2026-10-21: 106 issues, 1 memory, 113 edges restored). `bd -C <dir>
-  bootstrap` does not create the project; run it from inside the clone.
-  Server history is not mirrored, only its current state.
+- **Fix (2026-11-21, owner)**: never run `bd dolt push/pull` here, and do not
+  mirror the server to a git origin. The shared Dolt server is the only beads
+  store; git repos are NOT Dolt remotes. The 2026-10-21 mirror script and
+  origin `refs/dolt/*` were removed under aib-82o.
 - Observed: 2026-07-19 (1.0.4), 2026-10-21 (1.3.1), aib repo.
-
-## Mirror push rejected: workspace behind origin `refs/dolt/data`
-
-- **Symptom (bd 1.3.1)**: `scripts/beads-mirror-push.sh` fails at step 5 with
-  `push to origin/main: ... ! [rejected] main -> main (non-fast-forward)`;
-  `bd dolt pull` inside `~/.tmp/beads-mirror/<db>` then aborts with `merge
-  conflicts in issues require operator resolution`.
-- **Cause**: another machine or session mirrored since this workspace was
-  last bootstrapped; the workspace is only a cache of origin's ref, and its
-  stale history conflicts with the newer one.
-- **Fix (2026-11-09)**: the server is the source of truth, so rebuild the
-  cache: `mv ~/.tmp/beads-mirror/<db> ~/.tmp/beads-mirror/<db>.stale-<date>`
-  and rerun the script — it re-clones, bootstraps from origin's current ref,
-  imports the server state, and fast-forwards (`refs/dolt/data: <old> ->
-  <new>`). Delete the moved-aside copy once the push is confirmed.
-- Observed: 2026-11-09, bd 1.3.1, aib repo.
-
-## Bootstrapped database from an older `refs/dolt/data` needs schema migrations
-
-- **Symptom**: after `bd bootstrap --yes` of a ref written by an older bd,
-  commands stop because the database needs schema migrations (34 of them
-  from the 2026-08-30 ref, written by bd 1.0.x; the message cites
-  gastownhall/beads issue #4259).
-- **Fix**: run `bd migrate --force` once in that checkout (this bd becomes the
-  designated migrator). It is idempotent (`✓ Version matches` on a current
-  database), so the mirror script runs it after every bootstrap. The public
-  ref has carried the 1.3.1 schema since 2026-10-21, so a fresh bootstrap no
-  longer hits this.
-- Observed: 2026-10-21, bd 1.3.1.
 
 ## `bd sql` unsupported in embedded mode
 

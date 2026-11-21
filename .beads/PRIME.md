@@ -11,7 +11,7 @@ Re-run `bd prime` after compaction.
 bd ready | bd show <id> | bd update <id> --claim | bd close <id>... [--reason=]
 bd create --title="..." --type=task|bug|feature -p 0-4 [--description= --acceptance=]
 bd dep add <issue> <depends-on> | bd blocked | bd stale | bd search <kw>
-bd stats | bd doctor | bash scripts/beads-mirror-push.sh   # never bare `bd dolt push`
+bd stats | bd doctor   # the Dolt server is the only store: never `bd dolt push/pull`
 ```
 
 Priority is numeric (0=critical … 4=backlog), never "high/medium/low".
@@ -21,9 +21,7 @@ Create the bead BEFORE coding; claim before starting; batch closes.
 
 1. File beads for follow-up work; close finished, update in-progress.
 2. Quality gates if code changed (tests, linters).
-3. `bash scripts/beads-mirror-push.sh` — mirrors the shared beads DB to
-   origin `refs/dolt/data` (bare `bd dolt push` pushes a stale local dir).
-4. `git add`/`commit`, `git pull --rebase`, `git push` — must end
+3. `git add`/`commit`, `git pull --rebase`, `git push` — must end
    "up to date with origin"; if push fails, resolve and retry. Work is
    NOT complete until push succeeds.
 
