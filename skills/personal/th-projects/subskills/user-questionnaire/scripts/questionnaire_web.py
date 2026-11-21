@@ -561,14 +561,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     if existing:
         _release_serve(existing)
     (state_dir / "server.json").unlink(missing_ok=True)
-    cmd = [sys.executable, str(Path(__file__).resolve()), "serve", str(packet), "--foreground",
-           "--state-dir", str(state_dir), "--bind", args.bind, "--port", str(args.port)]
-    if args.host:
-        cmd += ["--host", args.host]
-    if args.token:
-        cmd += ["--token", args.token]
-    if args.no_tailscale_serve:
-        cmd.append("--no-tailscale-serve")
+    cmd = daemon_command(args, packet, state_dir)
     with open(state_dir / "server.log", "ab") as log:
         subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True, close_fds=True)
     deadline = time.time() + 15
@@ -811,6 +804,20 @@ def cmd_stop(args: argparse.Namespace) -> int:
     _release_serve(info)
     print(f"stopped pid {info['pid']} on port {info['port']}")
     return 0
+
+
+def daemon_command(args: argparse.Namespace, packet: Path, state_dir: Path) -> list[str]:
+    """The foreground child's argv. Values use --flag=value: a user token or host
+    starting with "-" would otherwise parse as an option in the child."""
+    cmd = [sys.executable, str(Path(__file__).resolve()), "serve", str(packet), "--foreground",
+           f"--state-dir={state_dir}", f"--bind={args.bind}", f"--port={args.port}"]
+    if args.host:
+        cmd.append(f"--host={args.host}")
+    if args.token:
+        cmd.append(f"--token={args.token}")
+    if args.no_tailscale_serve:
+        cmd.append("--no-tailscale-serve")
+    return cmd
 
 
 def main(argv: list[str] | None = None) -> int:

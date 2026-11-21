@@ -432,3 +432,16 @@ def test_token_url_without_trailing_slash_redirects_relatively(server):
     conn.request("GET", "/q/tok/")
     html = conn.getresponse().read().decode()
     assert '"api": "api"' in html and '"/q/tok/api"' not in html, "the page's API base is relative"
+
+
+def test_daemon_argv_keeps_user_values_that_start_with_a_dash(web, packet, state_dir, monkeypatch):
+    """A user --token/--host beginning with "-" must reach the child unchanged (aib-4tb5)."""
+    import argparse
+
+    args = argparse.Namespace(bind="127.0.0.1", port=0, host="-host", token="-tok", no_tailscale_serve=True)
+    cmd = web.daemon_command(args, packet, state_dir)
+    seen = {}
+    monkeypatch.setattr(web, "cmd_serve", lambda parsed: seen.update(vars(parsed)) or 0)
+    assert web.main(cmd[2:]) == 0
+    assert (seen["token"], seen["host"], seen["foreground"]) == ("-tok", "-host", True)
+    assert Path(seen["state_dir"]) == state_dir

@@ -675,6 +675,17 @@ class LifecycleTests(unittest.TestCase):
             finally:
                 self.assertTrue(dashboard.stop(folder)["stopped"])
 
+
+    def test_startup_log_tail_excludes_earlier_runs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            log = Path(temporary) / "server.log"
+            log.write_text("earlier run failed\n")
+            start = log.stat().st_size
+            self.assertEqual(dashboard.log_tail(log, start), "")
+            with open(log, "a") as stream:
+                stream.write("this run\nfailed\n")
+            self.assertEqual(dashboard.log_tail(log, start), "this run | failed")
+            self.assertEqual(dashboard.log_tail(Path(temporary) / "missing.log"), "")
     def test_detached_start_reuse_stop_and_stale_pid_safety(self):
         """Spec: REQ-progress-dashboard-006."""
         with tempfile.TemporaryDirectory() as temporary:
