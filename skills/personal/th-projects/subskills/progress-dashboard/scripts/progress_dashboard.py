@@ -490,6 +490,22 @@ def watch_codex(folder: Path, thread_id: str, home=None) -> dict:
     return {"watching": "codex", "thread_id": config["thread_id"]}
 
 
+def watch_claude(folder: Path, session_id: str, home=None) -> dict:
+    from runtime_sources import claude_configuration, resolve
+
+    config = claude_configuration(session_id, home)
+    with lock(folder):
+        state = load(folder / "state.json")
+        existing = load(folder / "runtime.json", {})
+        if existing and existing != config:
+            raise ValueError("workspace already watches another runtime parent or home")
+        # Validate the configured parent session before committing the locator.
+        resolve(config, state["actor"], state["agents"], load(folder / "sources.json", []))
+        if existing != config:
+            save(folder / "runtime.json", config)
+    return {"watching": "claude", "session_id": config["session_id"]}
+
+
 def health(info: dict) -> bool:
     try:
         with urlopen(info["url"] + "api/health", timeout=0.5) as reply:
@@ -583,6 +599,9 @@ def parser() -> argparse.ArgumentParser:
         init.add_argument("--codex-thread", default=os.environ.get("CODEX_THREAD_ID"),
                           help="watch this Codex parent and known children; defaults to CODEX_THREAD_ID")
         init.add_argument("--codex-home", help="runtime home; defaults to CODEX_HOME or ~/.codex")
+        init.add_argument("--claude-session", default=os.environ.get("CLAUDE_CODE_SESSION_ID"),
+                          help="watch this Claude Code parent and known sub-agents; defaults to CLAUDE_CODE_SESSION_ID")
+        init.add_argument("--claude-home", help="runtime home; defaults to CLAUDE_CONFIG_DIR or ~/.claude")
         if command == "start":
             init.add_argument("--bind", default="127.0.0.1")
             init.add_argument("--port", type=int, default=0)
@@ -609,6 +628,10 @@ def parser() -> argparse.ArgumentParser:
     watch = commands.add_parser("watch-codex", help="resolve this parent and its known agents from the runtime index")
     watch.add_argument("--thread-id", default=os.environ.get("CODEX_THREAD_ID"))
     watch.add_argument("--home")
+    claude = commands.add_parser("watch-claude",
+                                 help="resolve this Claude Code parent and its known sub-agents from its own session folder")
+    claude.add_argument("--session-id", default=os.environ.get("CLAUDE_CODE_SESSION_ID"))
+    claude.add_argument("--home")
     for command in ("serve", "_serve"):
         server = commands.add_parser(command)
         server.add_argument("--bind", default="127.0.0.1")
@@ -633,6 +656,11 @@ def main() -> int:
                     result.update(watch_codex(folder, args.codex_thread, args.codex_home))
                 except ValueError as error:
                     result["usage_warning"] = str(error)
+            if args.claude_session and not (folder / "runtime.json").exists() and "usage_warning" not in result:
+                try:
+                    result.update(watch_claude(folder, args.claude_session, args.claude_home))
+                except ValueError as error:
+                    result["usage_warning"] = str(error)
             if args.command == "start":
                 result["url"] = serve(folder, args.bind, args.port)["url"]
         elif args.command == "checkpoint":
@@ -655,6 +683,8 @@ def main() -> int:
             result = attach(folder, args.id, args.provider, args.path)
         elif args.command == "watch-codex":
             result = watch_codex(folder, args.thread_id, args.home)
+        elif args.command == "watch-claude":
+            result = watch_claude(folder, args.session_id, args.home)
         elif args.command == "serve":
             result = serve(folder, args.bind, args.port)
         elif args.command == "stop":

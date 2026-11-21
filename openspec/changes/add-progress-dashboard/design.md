@@ -49,6 +49,13 @@ never prunes unresolved parser offsets, even if the derived binding cache is
 damaged. No unrelated session
 content, index path or transcript path is returned to the browser.
 
+Claude Code initialization binds `CLAUDE_CODE_SESSION_ID` the same way when no
+binding exists. The parent is found by name only under `projects/*/`; each tick
+lists only that session's own `subagents/` folder (bounded at 200) and reads its
+agents' small descriptors to match published IDs (agent id, tool-use id, then a
+unique description). Other sessions and projects are never read; the same
+precedence, conflict, retention and outage rules apply.
+
 Native Codex `token_usage_record` totals are filtered by thread identity and
 supersede lagging legacy `event_msg/token_count` emission. Copied fork history is
 excluded using native history ordinals; later samples never add both streams.

@@ -33,6 +33,28 @@ binding cache cannot prune unresolved parser offsets. No transcript-directory cr
 auth-file access or runtime status inference occurs. Runtime model/thread/path
 are shown separately from parent-reported work/model/branch/PR context.
 
+## Claude Code parent and known sub-agents
+
+`init` automatically watches `CLAUDE_CODE_SESSION_ID` when no runtime binding
+exists yet (a Codex binding wins if both are set). An existing workspace, a
+missing variable or a custom home (`CLAUDE_CONFIG_DIR`, else `~/.claude`) uses:
+
+```bash
+uv run "$DASHBOARD" --slug "$SLUG" watch-claude --session-id "$PARENT_SESSION_ID"
+# Optional: --home "$CLAUDE_RUNTIME_HOME"
+```
+
+The [runtime resolver](../scripts/runtime_sources.py) finds the parent by name
+only (`<home>/projects/*/<session>.jsonl`, exactly one match), then lists that
+session's own `subagents/` folder (at most 200 agents) and reads each agent's
+small `.meta.json`. A published agent matches by exact agent id or tool-use id
+(publish either as its `thread_id`), else by a unique `description` equal to its
+id or name; ambiguity warns and attributes nothing, and unmatched sub-agents are
+never added. No other session, project or transcript content is read by the
+lookup. Binding, conflict refusal, retained bindings across outages and explicit
+precedence work exactly as for Codex; a retained Claude binding drops when the
+agent publishes a different selector. `init --claude-session ""` stays explicit.
+
 ## Explicit sources and other runtimes
 
 Known Codex/Claude logs can still attach directly. The ID must be the workspace

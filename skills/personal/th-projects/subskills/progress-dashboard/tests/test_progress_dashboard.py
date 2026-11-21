@@ -21,8 +21,13 @@ from urllib.request import Request, urlopen
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 import progress_dashboard as dashboard
+
+# The CLI binds the calling runtime session from the environment; tests must
+# never attach the real session that happens to be running them.
+for _variable in ("CODEX_THREAD_ID", "CODEX_HOME", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CONFIG_DIR"):
+    os.environ.pop(_variable, None)
 from dashboard_server import DashboardServer
-from runtime_sources import configuration, resolve, retain
+from runtime_sources import claude_configuration, configuration, resolve, retain
 
 
 class WorkspaceFixture:
@@ -420,6 +425,126 @@ class RuntimeTests(WorkspaceFixture, unittest.TestCase):
         with self.assertRaises(ValueError):
             dashboard.watch_codex(self.folder, "invalid", self.home)
         self.assertFalse((self.folder / "runtime.json").exists())
+
+
+class ClaudeRuntimeTests(WorkspaceFixture, unittest.TestCase):
+    """Claude Code parent plus the sub-agents in its own session folder (aib-eg4)."""
+
+    def setUp(self):
+        super().setUp()
+        self.home = Path(self.tmp.name) / "claude-home"
+        self.parent = "00000000-0000-4000-8000-0000000000c1"
+        self.sibling = "00000000-0000-4000-8000-0000000000c2"
+        project = self.home / "projects" / "-work-repo"
+        self.session = project / self.parent
+        self.parent_log = project / f"{self.parent}.jsonl"
+        self.reviewer_log = self.session / "subagents" / "agent-a1b2c3.jsonl"
+        self.unmatched_log = self.session / "subagents" / "agent-d4e5f6.jsonl"
+        decoys = [project / f"{self.sibling}.jsonl", project / self.sibling / "subagents" / "agent-a1b2c3.jsonl",
+                  self.home / "projects" / "-other" / "00000000-0000-4000-8000-0000000000c3.jsonl"]
+        for index, path in enumerate([self.parent_log, self.reviewer_log, self.unmatched_log, *decoys]):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({"type": "assistant", "message": {"id": f"m{index}",
+                "usage": {"input_tokens": 10, "output_tokens": 3}}}) + "\n")
+        for log, meta in ((self.reviewer_log, {"agentType": "general-purpose", "description": "Review pass",
+                                               "toolUseId": "toolu_review", "model": "runtime-model"}),
+                          (self.unmatched_log, {"description": "Unpublished helper"}),
+                          (decoys[1], {"description": "Review pass", "toolUseId": "toolu_review"})):
+            log.with_name(log.stem + ".meta.json").write_text(json.dumps(meta))
+
+    def config(self):
+        return claude_configuration(self.parent, self.home)
+
+    def test_init_binds_the_session_and_measures_published_sub_agents(self):
+        """Spec: REQ-progress-dashboard-004."""
+        result = subprocess.run([sys.executable, str(SCRIPTS / "progress_dashboard.py"),
+            "--root", self.tmp.name, "--slug", "claude-auto", "init", "--title", "Claude usage",
+            "--actor", "parent", "--repo-root", self.tmp.name], env={**os.environ,
+            "CLAUDE_CODE_SESSION_ID": self.parent, "CLAUDE_CONFIG_DIR": str(self.home)},
+            capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(result.stdout)["watching"], "claude")
+        folder = Path(self.tmp.name) / "claude-auto"
+        self.assertEqual(dashboard.load(folder / "runtime.json")["session_id"], self.parent)
+        snapshot = self.snapshot()
+        snapshot["agents"][0]["thread_id"] = "toolu_review"
+        dashboard.checkpoint(folder, snapshot, 0)
+        server = DashboardServer(folder, "127.0.0.1", 0, "claude-runtime")
+        try:
+            view = server.view()
+            agents = {row["id"]: row for row in view["telemetry"]["agents"]}
+            reviewer = snapshot["agents"][0]["id"]
+            self.assertEqual(set(agents), {"parent", reviewer})  # the unpublished helper is not attributed
+            self.assertEqual(agents[reviewer]["thread_id"], "a1b2c3")
+            self.assertEqual(agents[reviewer]["provider"], "claude")
+            self.assertEqual(view["telemetry"]["totals"]["total_tokens"], 26)
+            self.assertNotIn(str(self.home), json.dumps(view))
+        finally:
+            server.server_close()
+
+    def test_matching_is_exact_then_unique_description_and_never_guesses(self):
+        """Spec: REQ-progress-dashboard-004."""
+        config = self.config()
+        for agent, expected in (({"id": "r", "thread_id": "a1b2c3"}, "a1b2c3"),
+                                ({"id": "r", "thread_id": "toolu_review"}, "a1b2c3"),
+                                ({"id": "Review pass"}, "a1b2c3"),
+                                ({"id": "r", "name": "Review pass"}, "a1b2c3")):
+            with self.subTest(agent=agent):
+                _, metadata, warnings = resolve(config, "owner", [agent], [])
+                self.assertEqual(metadata["r" if agent["id"] == "r" else agent["id"]]["thread_id"], expected)
+                self.assertFalse(warnings)
+        _, metadata, _ = resolve(config, "owner", [{"id": "r", "thread_id": "toolu_missing"}], [])
+        self.assertNotIn("r", metadata)
+        self.unmatched_log.with_name("agent-d4e5f6.meta.json").write_text(json.dumps({"description": "Review pass"}))
+        sources, metadata, warnings = resolve(config, "owner", [{"id": "Review pass"}], [])
+        self.assertNotIn("Review pass", metadata)
+        self.assertTrue(warnings)
+        explicit = {"id": "r", "provider": "claude", "path": str(self.home / "explicit.jsonl")}
+        sources, metadata, _ = resolve(config, "owner", [{"id": "r", "thread_id": "a1b2c3"}], [explicit])
+        self.assertEqual(next(row for row in sources if row["id"] == "r"), explicit)
+        self.assertNotIn("r", metadata)
+
+    def test_lookup_reads_nothing_outside_the_bound_session(self):
+        """Spec: REQ-progress-dashboard-004."""
+        opened = []
+        original = Path.read_text
+
+        def spy(path, *args, **kwargs):
+            opened.append(Path(path))
+            return original(path, *args, **kwargs)
+
+        with patch.object(Path, "read_text", spy):
+            resolve(self.config(), "owner", [{"id": "r", "thread_id": "a1b2c3"}], [])
+        self.assertTrue(opened)
+        for path in opened:
+            self.assertTrue(path.is_relative_to(self.session / "subagents"), path)
+
+    def test_missing_or_conflicting_parent_refuses_without_binding(self):
+        """Spec: REQ-progress-dashboard-004."""
+        with self.assertRaises(ValueError):
+            dashboard.watch_claude(self.folder, "00000000-0000-4000-8000-0000000000ff", self.home)
+        with self.assertRaises(ValueError):
+            dashboard.watch_claude(self.folder, "not-a-uuid", self.home)
+        self.assertFalse((self.folder / "runtime.json").exists())
+        dashboard.watch_claude(self.folder, self.parent, self.home)
+        with self.assertRaises(ValueError):
+            dashboard.watch_codex(self.folder, "00000000-0000-4000-8000-000000000001", self.home)
+        self.assertEqual(dashboard.load(self.folder / "runtime.json")["provider"], "claude")
+        result = subprocess.run([sys.executable, str(SCRIPTS / "progress_dashboard.py"),
+            "--root", self.tmp.name, "--slug", "explicit-only", "init", "--claude-session", ""],
+            env={**os.environ, "CLAUDE_CODE_SESSION_ID": self.parent, "CLAUDE_CONFIG_DIR": str(self.home)},
+            capture_output=True, text=True, check=True)
+        self.assertNotIn("watching", json.loads(result.stdout))
+        self.assertFalse((Path(self.tmp.name) / "explicit-only" / "runtime.json").exists())
+
+    def test_retained_claude_bindings_survive_an_outage_and_drop_on_a_new_selector(self):
+        """Spec: REQ-progress-dashboard-004."""
+        config = self.config()
+        proven, identities, _ = resolve(config, "owner", [{"id": "r", "thread_id": "a1b2c3"}], [])
+        saved = {"config": config, "sources": proven, "metadata": identities}
+        retained, kept, _ = retain(config, "owner", [{"id": "r", "thread_id": "a1b2c3"}], saved, [])
+        self.assertEqual({row["id"] for row in retained}, {"owner", "r"})
+        retained, kept, _ = retain(config, "owner", [{"id": "r", "thread_id": "other"}], saved, [])
+        self.assertEqual({row["id"] for row in retained}, {"owner"})
 
 
 class HttpTests(WorkspaceFixture, unittest.TestCase):

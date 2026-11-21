@@ -30,6 +30,11 @@ except ImportError:
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 import progress_dashboard as model
+
+# The CLI binds the calling runtime session from the environment; tests must
+# never attach the real session that happens to be running them.
+for _variable in ("CODEX_THREAD_ID", "CODEX_HOME", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CONFIG_DIR"):
+    os.environ.pop(_variable, None)
 from dashboard_server import DashboardServer
 
 
