@@ -20,7 +20,7 @@ metadata:
     - Claude Fable 5.1
     - Claude Opus 5.5
   status: active
-  last_reviewed: "2026-10-21"
+  last_reviewed: "2026-11-21"
 compatibility: Requires local file access; review-ready packets require a subagent facility. The validator and the web review surface run with uv and Python 3.11+, stdlib only; the web surface binds a local TCP port and prints an https URL fronted by `tailscale serve` when the node has Tailscale certificates, else the node's Tailscale IPv4 or FQDN URL.
 ---
 
@@ -110,18 +110,36 @@ A run that produced no owner gates publishes nothing and says so.
    recommendation, any delta diagram, labeled background, and option cards
    with hold/reject/edit controls; a separate final question asks whether to
    apply. No LLM tokens are spent after this command.
+8. **Arm the submit poke** when this session should act on the answers. Run
+   `watch` as a background command whose exit re-invokes the session (Claude
+   Code: Bash `run_in_background`); it idles without output until the owner
+   clicks Submit, then exits printing one `QUESTIONNAIRE_SUBMISSION` JSON line
+   with only what changed since the last delivered submission, computed by
+   script (no model reads the packet or the answers to find it). `--ingest`
+   also writes the packet and adds a one-line `QUESTIONNAIRE_INGEST` outcome,
+   so a poke needs no further tool call before acting. Handle it, then re-arm
+   the same command. Without background commands, use `status --wait N`.
+
+   ```bash
+   uv run "$QUESTIONNAIRE_SKILL_DIR/scripts/questionnaire_web.py" watch --ingest /absolute/path/to/packet.md
+   ```
 
 ## Walk the owner through it
 
-**Asynchronous answers arrive through the web form.** A later session starts
-by ingesting them, then proceeds exactly as if it had recorded them in chat:
+**Asynchronous answers arrive through the web form.** The owner may submit
+repeatedly: answers stay editable after Submit, and each further Submit sends
+only the changes. A session woken by `watch` acts on the delta it printed
+(never re-reads the whole packet for unchanged items) and re-arms.
+A later session without a watcher starts by ingesting, then proceeds exactly
+as if it had recorded the answers in chat:
 
 ```bash
 uv run "$QUESTIONNAIRE_SKILL_DIR/scripts/questionnaire_web.py" status /abs/packet.md   # exit 0 once submitted; --wait N polls
 uv run "$QUESTIONNAIRE_SKILL_DIR/scripts/questionnaire_web.py" ingest /abs/packet.md   # writes owner records into the packet
 ```
 
-`ingest` maps each answer into the item's owner decision record and state
+`ingest` writes the latest submission (later unsubmitted drafts wait) and
+maps each answer into the item's owner decision record and state
 (picked option → `Agreed`, hold → `Held`, reject → `Rejected`, edited option →
 `Needs-rework`), refuses a packet that changed since it was served, re-runs
 the validator, and reports `apply_now`. Edited items go back through steps 3-4

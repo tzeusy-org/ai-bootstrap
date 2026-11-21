@@ -51,6 +51,9 @@ and diagrams inlined), so it works offline. Layout and behavior:
   card;
 - submit stays disabled until every item is answered, every edit is
   described, and the apply question is answered; the server enforces the same;
+- submitting does not lock the page: the owner can change any answer and
+  "Submit changes" again; submit stays disabled while nothing differs from the
+  last submission, and the server refuses an empty resubmission;
 - phones on the tailnet use the same URL: below the sidebar width a top-bar
   "Next ↓" jumps to the next unanswered decision (then to submit); touch
   screens get 44px targets, 16px fields (no iOS focus zoom), and no keyboard
@@ -79,8 +82,46 @@ URL carries a random token; the page is reachable to anyone holding the link
 on the bound interfaces (the whole tailnet when fronted by `tailscale serve`),
 which is why packets never carry secrets.
 
-`status <packet>` reports progress (exit 0 only after the owner submitted;
-`--wait N` polls). `ingest <packet>` writes the answers into the packet:
+### Submit poke and delta submissions
+
+Each Submit appends a numbered snapshot (`submissions[]`) to the answers file;
+answers changed afterwards are drafts until the next Submit. `watch <packet>`
+is the poke: run it as a background command whose exit wakes the session. It
+polls the answers file (default every 2 s; `--timeout N` exits 3), and once a
+submission newer than `delivered_seq` exists it records that sequence as
+delivered and prints one line:
+
+```text
+QUESTIONNAIRE_SUBMISSION {"seq":3,"since":1,"at":"…","collapsed":2,"apply_now":true,"changed":{"dec-two":{"kind":"pick","choice":"B","note":"fine","was":"hold"}},"unchanged":4}
+```
+
+- `changed` lists only items whose kind, choice, or note differs from the
+  last delivered snapshot, with the new answer and a short `was`; unchanged
+  items are only counted. The first delivery diffs against nothing, so it
+  lists every answer.
+- `apply_now` appears only when the apply answer changed.
+- Several submits before the session re-arms merge into one delta
+  (`collapsed` counts them), so a slow session is poked once, not per click.
+- `--all` re-delivers every answer of the newest submission, for a session
+  that lost the earlier deltas.
+- `--ingest` runs `ingest` in the same lock and adds one line,
+  `QUESTIONNAIRE_INGEST {"written":true,"needs_rework":["dec-two"]}` (keys
+  `error` and `validator_errors` appear only when set). A refusal, such as a
+  packet changed since answering, is reported there and leaves the packet
+  untouched; the delta is still delivered.
+
+Everything up to here is deterministic script work; the model spends tokens
+only on the delta line. On a poke: ingest (or rely on `--ingest`), act only
+on the changed items (an item that moved off a
+previously routed decision needs its earlier routing revisited), then re-arm
+`watch`. Delivery is at most once per sequence, across sessions: a second
+watcher on the same packet sees nothing until the next Submit. Ingesting
+rewrites the packet, so an open page shows "packet revised, reload"; the
+answers carry over on reload.
+
+`status <packet>` reports progress, submission count, and `delivered_seq`
+(exit 0 once the owner has submitted at least once; `--wait N` polls).
+`ingest <packet>` writes the latest submission into the packet:
 
 | Owner action on the page | Item state | Owner decision record |
 |---|---|---|
@@ -100,7 +141,9 @@ pre-filled (else `Unrouted` until the applying agent names the owning
 workflow), and `Routing evidence: Not routed`.
 `ingest` refuses when the packet changed after the owner began answering
 (`--force` to override after re-validating the framing) or when the owner has not
-submitted (`--partial` ingests the answered items only). Its output's
+submitted (`--partial` ingests the current answered items, drafts included).
+Re-ingesting after a later submission rewrites only the records whose answer
+changed; each run reports the `submission` sequence it wrote. Its output's
 `apply_now` field is the owner's answer to the apply offer: `true` authorizes
 the routing checklist below for exactly this packet's `Agreed` and `Held`
 items; `false` or `null` leaves them recorded.

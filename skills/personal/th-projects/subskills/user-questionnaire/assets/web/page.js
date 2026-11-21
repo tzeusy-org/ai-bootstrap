@@ -41,8 +41,19 @@
   const byData = (attr, id) => $$(`[${attr}]`).filter((el) => el.getAttribute(attr) === id);
   const recordedAt = (id) => confirmed.items[id]?.recorded_at ?? null;
   const answerOf = (id) => (pending.has(id) ? pending.get(id).answer : confirmed.items[id]) || null;
-  const isDone = () => Boolean(confirmed.completed_at);
-  const isReadonly = () => !boot.live || isDone();
+  // The owner may submit repeatedly; each submit sends the session only what
+  // changed. "Done" means the server's answers match the last submission.
+  const lastSubmission = () => (confirmed.submissions || []).at(-1) || null;
+  const sameAnswer = (a, b) =>
+    (!a && !b) || (a && b && a.kind === b.kind && (a.choice || "") === (b.choice || "") && (a.note || "") === (b.note || ""));
+  const isDone = () => {
+    const last = lastSubmission();
+    if (!last) return false;
+    if (last.apply_now !== confirmed.apply_now) return false;
+    const ids = new Set([...Object.keys(last.items), ...Object.keys(confirmed.items)]);
+    return [...ids].every((id) => sameAnswer(last.items[id], confirmed.items[id]));
+  };
+  const isReadonly = () => !boot.live;
   const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
   // Adopt the server's note/edit text for items the owner is not working on
@@ -291,14 +302,17 @@
     const done = isDone();
     const submit = $("#submit");
     submit.disabled = !boot.live || done || missing.length > 0 || !applyChosen || failed.size > 0;
-    submit.textContent = done ? "Submitted" : "Submit review";
-    $("#reopen").hidden = !done || !boot.live;
+    const last = lastSubmission();
+    submit.textContent = done ? "Submitted" : last ? "Submit changes" : "Submit review";
     $("#final").classList.toggle("is-done", done);
 
     const status = $("#final-status");
     if (done) {
-      status.textContent = `Submitted ${clock(confirmed.completed_at)}. You can close this page.`;
+      status.textContent = `Submitted ${clock(last.at)}. Change any answer and submit again to send just the changes.`;
       status.className = "save is-ok";
+    } else if (last && !failed.size && !missing.length && applyChosen) {
+      status.textContent = `Changed since your submission at ${clock(last.at)}; submit to send the changes.`;
+      status.className = "save";
     } else if (failed.size) {
       status.textContent = "Some answers did not save; retry them first.";
       status.className = "save is-err";
@@ -441,7 +455,6 @@
       return setAnswer(id, failed.get(id).next);
     }
     if (event.target.id === "submit") return complete({ completed: true }, "Submitting…");
-    if (event.target.id === "reopen") return complete({ completed: false }, "Reopening…");
     if (event.target.id === "help-btn") return $("#help").showModal();
     if (event.target.id === "next-btn") return nextUnanswered();
   });
