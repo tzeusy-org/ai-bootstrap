@@ -38,6 +38,7 @@ jobs:
       - name: Run report-only Beads safety suites
         run: |
           uv run skills/personal/beads-orchestration/tests/test_delivery_package.py
+          uv run skills/personal/beads-orchestration/subskills/beads-coordinator/tests/test_check_packet.py
           uv run skills/personal/beads-orchestration/subskills/beads-coordinator/tests/test_coordinator_registry.py
           uv run skills/personal/beads-orchestration/subskills/beads-coordinator/tests/test_normalize_pr_review_state.py
           uv run skills/personal/beads-orchestration/subskills/beads-coordinator/tests/test_rank_ready_work.py

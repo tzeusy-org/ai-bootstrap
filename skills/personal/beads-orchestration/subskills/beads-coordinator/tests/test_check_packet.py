@@ -1,3 +1,8 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
 """Tests for scripts/check_packet.py (structural packet check)."""
 from __future__ import annotations
 
@@ -18,40 +23,58 @@ spec.loader.exec_module(check_packet)
 
 
 def bead(**fields):
-    base = {"id": "x-1", "description": "Outcome.", "acceptance_criteria": "Observable.",
-            "design": "Decision.", "labels": []}
+    base = {"id": "x-1", "issue_type": "feature", "description": "Outcome.",
+            "acceptance_criteria": "Observable.", "design": "Decision.", "labels": []}
     base.update(fields)
     return base
 
 
 class PacketStatusTests(unittest.TestCase):
-    def test_complete_with_design(self) -> None:
+    def test_complete_feature_with_design(self) -> None:
         self.assertEqual(check_packet.packet_status(bead()),
                          {"id": "x-1", "packet_complete": True, "missing": []})
 
-    def test_scope_section_stands_in_for_blank_design(self) -> None:
-        # Canary 2: aib-b2t (design blank, scope in description) passed.
-        for description in ("Fix it.\n\n## Scope\nOnly the helper.",
-                            "## Steps to reproduce\nRun it.",
-                            "Scope: the ranker only."):
-            with self.subTest(description=description):
-                status = check_packet.packet_status(bead(design="", description=description))
-                self.assertTrue(status["packet_complete"], status)
+    def test_canary_rulings(self) -> None:
+        # Canary 2: aib-3gt (bug, design set) and aib-b2t (task, design blank,
+        # surface named in a plain paragraph) passed; aib-435 (task, design
+        # blank, needs-shaping) was rejected.
+        cases = {
+            "aib-3gt": (bead(issue_type="bug"), True),
+            "aib-b2t": (bead(issue_type="task", design="",
+                             description="Run scripts/x.py in CI; it is missing."), True),
+            "aib-435": (bead(issue_type="task", design=None,
+                             labels=["needs-shaping", "scope:local-state"]), False),
+        }
+        for name, (record, complete) in cases.items():
+            with self.subTest(name=name):
+                self.assertEqual(check_packet.packet_status(record)["packet_complete"], complete)
 
-    def test_blank_design_without_scope_section_is_incomplete(self) -> None:
-        # Canary 2: aib-435 (design blank, no scope section) was rejected.
-        status = check_packet.packet_status(
-            bead(design=None, description="Move it aside once a second cycle runs clean."))
+    def test_feature_needs_design_or_scope_section(self) -> None:
+        status = check_packet.packet_status(bead(design="", description="Add a thing."))
         self.assertEqual(status["missing"], ["decisions:design-or-scope-section"])
-        # "scope" inside prose is not a section.
-        status = check_packet.packet_status(
-            bead(design="", description="This widens the scope of the helper."))
-        self.assertFalse(status["packet_complete"])
+        for description in ("Add it.\n\n## Scope\nOnly the helper.",
+                            "### Steps to reproduce\nRun it.",
+                            "Scope: the ranker only.",
+                            "- Scope: the ranker only.",
+                            "**Scope:** the ranker only.",
+                            "**Scope**: the ranker only."):
+            with self.subTest(description=description):
+                self.assertTrue(check_packet.packet_status(
+                    bead(design="", description=description))["packet_complete"])
+
+    def test_prose_is_not_a_scope_section(self) -> None:
+        for description in ("Scope creep is the risk here.",
+                            "scope of this change is unclear",
+                            "This widens the scope: wider.",
+                            "Reproduction is not yet known.",
+                            "Repro unknown"):
+            with self.subTest(description=description):
+                self.assertFalse(check_packet.packet_status(
+                    bead(design="", description=description))["packet_complete"])
 
     def test_acceptance_must_be_the_structured_field(self) -> None:
         status = check_packet.packet_status(bead(
-            acceptance_criteria="  ",
-            description="Do it.\n\nAcceptance:\n- passes"))
+            acceptance_criteria="  ", description="Do it.\n\nAcceptance:\n- passes"))
         self.assertEqual(status["missing"], ["acceptance:acceptance_criteria"])
 
     def test_missing_outcome_and_shaping_label(self) -> None:
@@ -65,8 +88,8 @@ class PacketStatusTests(unittest.TestCase):
 
     def test_null_fields_and_labels(self) -> None:
         status = check_packet.packet_status({"id": "x-2"})
-        self.assertFalse(status["packet_complete"])
-        self.assertIn("acceptance:acceptance_criteria", status["missing"])
+        self.assertEqual(status["missing"],
+                         ["outcome:description", "acceptance:acceptance_criteria"])
 
 
 class CliTests(unittest.TestCase):
@@ -75,9 +98,13 @@ class CliTests(unittest.TestCase):
 
         def fake_run(cmd, capture_output, text):
             calls.append(cmd)
-            key = cmd[3]
-            out = responses[key] if key == "ready" else responses[cmd[4]]
-            return mock.Mock(returncode=0, stdout=json.dumps(out), stderr="")
+            out = responses["ready"] if cmd[3] == "ready" else responses.get(cmd[4])
+            if isinstance(out, BaseException):
+                raise out
+            if out is None:
+                return mock.Mock(returncode=1, stdout="", stderr="Error: no issue found")
+            return mock.Mock(returncode=0, stdout=out if isinstance(out, str) else json.dumps(out),
+                             stderr="")
 
         stdout = io.StringIO()
         with mock.patch.object(check_packet.subprocess, "run", fake_run), \
@@ -85,7 +112,7 @@ class CliTests(unittest.TestCase):
             code = check_packet.main(argv)
         return code, json.loads(stdout.getvalue()), calls
 
-    def test_defaults_to_ready_queue(self) -> None:
+    def test_defaults_to_whole_ready_queue(self) -> None:
         code, payload, calls = self.run_main(["--repo-root", "/r"], {
             "ready": [{"id": "a-1"}, {"id": "a-2"}],
             "a-1": [bead(id="a-1")],
@@ -93,7 +120,7 @@ class CliTests(unittest.TestCase):
         })
         self.assertEqual(code, 0)
         self.assertEqual([b["packet_complete"] for b in payload["beads"]], [True, False])
-        self.assertEqual(calls[0], ["bd", "-C", "/r", "ready", "--json"])
+        self.assertEqual(calls[0], ["bd", "-C", "/r", "ready", "--limit", "0", "--json"])
 
     def test_explicit_ids_skip_ready(self) -> None:
         code, payload, calls = self.run_main(["--repo-root", "/r", "a-3"],
@@ -102,14 +129,20 @@ class CliTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(payload["beads"][0]["id"], "a-3")
 
-    def test_bd_failure_exits_nonzero(self) -> None:
-        failed = mock.Mock(returncode=1, stdout="", stderr="Error: unreachable")
-        stdout = io.StringIO()
-        with mock.patch.object(check_packet.subprocess, "run", return_value=failed), \
-                contextlib.redirect_stdout(stdout), self.assertRaises(SystemExit) as exit_:
-            check_packet.main(["--repo-root", "/r", "a-4"])
-        self.assertEqual(exit_.exception.code, 1)
-        self.assertEqual(json.loads(stdout.getvalue())["error"], "bd-failed")
+    def test_unreadable_bead_is_reported_per_bead(self) -> None:
+        code, payload, _ = self.run_main(["--repo-root", "/r", "a-4", "a-5", "a-6"], {
+            "a-4": None, "a-5": "not json", "a-6": [bead(id="a-6")]})
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["beads"][0], {"id": "a-4", "error": "Error: no issue found"})
+        self.assertIn("non-JSON", payload["beads"][1]["error"])
+        self.assertTrue(payload["beads"][2]["packet_complete"])
+
+    def test_tracker_failure_exits_nonzero(self) -> None:
+        for ready in (FileNotFoundError("bd"), "not json"):
+            with self.subTest(ready=ready):
+                code, payload, _ = self.run_main(["--repo-root", "/r"], {"ready": ready})
+                self.assertEqual(code, 1)
+                self.assertEqual(payload["error"], "bd-failed")
 
 
 if __name__ == "__main__":
