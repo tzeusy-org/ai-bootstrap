@@ -460,7 +460,11 @@ class ResolveReviewContextTests(unittest.TestCase):
                    pr_number: int = 99,
                    head_branch: str | None = None,
                    base_branch: str = "main",
-                   show_payloads: dict[str, object] | None = None) -> None:
+                   show_payloads: dict[str, object] | None = None,
+                   cwd_repo: str = "owner/repo",
+                   pr_url: str | None = None) -> None:
+        """``gh pr view`` answers for ``--repo`` when given; unscoped it answers
+        for the cwd checkout, whose PR of the same number is unrelated."""
         review_record = {
             "id": "aib-xyz",
             "description": description,
@@ -469,7 +473,7 @@ class ResolveReviewContextTests(unittest.TestCase):
         bd_list_json = json.dumps(bd_list or [])
         pr_json = json.dumps({
             "number": pr_number,
-            "url": f"https://github.com/owner/repo/pull/{pr_number}",
+            "url": pr_url or f"https://github.com/owner/repo/pull/{pr_number}",
             "state": "OPEN",
             "isDraft": False,
             "mergeStateStatus": "CLEAN",
@@ -510,6 +514,12 @@ if 'list' in argv:
 print(json.dumps({{"error": "unmatched bd: " + ' '.join(argv)}}), file=sys.stderr)
 sys.exit(1)
 """)
+        cwd_pr_json = json.dumps({
+            "number": pr_number, "url": f"https://github.com/{cwd_repo}/pull/{pr_number}",
+            "state": "MERGED", "isDraft": False, "mergeStateStatus": "UNKNOWN",
+            "reviewDecision": "APPROVED", "headRefName": "unrelated", "baseRefName": "main",
+            "mergedAt": "2026-02-13T00:00:00Z", "headRefOid": "fff000",
+        })
         bin_dir.add("gh", f"""
 import sys
 import json
@@ -517,17 +527,75 @@ import json
 argv = sys.argv[1:]
 cmd = ' '.join(argv)
 
-if 'repo' in argv and 'view' in argv:
-    print('owner/repo')
+if argv[:2] == ['repo', 'view']:
+    print({cwd_repo!r})
     sys.exit(0)
 
 if 'pr' in argv and 'view' in argv:
-    print({repr(pr_json)})
+    print({repr(pr_json)} if '--repo' in argv else {repr(cwd_pr_json)})
     sys.exit(0)
 
 print(json.dumps({{"error": "unmatched gh: " + cmd}}), file=sys.stderr)
 sys.exit(1)
 """)
+
+    def test_wrong_checkout_with_colliding_pr_number_fails(self) -> None:
+        # aib-1r0: the bead records owner/repo#99, the cwd is another repo
+        # whose PR 99 is an unrelated merged PR.
+        with FakeBinDir() as fbd:
+            self._make_bins(fbd, cwd_repo="butlers/butlers")
+            result = run_script("resolve_review_context.py", ["--issue-id", "aib-xyz"], env=fbd.env())
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        error = json.loads(result.stderr)
+        self.assertEqual(error["error_code"], "repo-mismatch")
+        self.assertEqual(error["owner_repo"], "owner/repo")
+
+    def test_pr_read_is_scoped_and_reports_repo_source(self) -> None:
+        with FakeBinDir() as fbd:
+            self._make_bins(fbd)
+            result = run_script("resolve_review_context.py", ["--issue-id", "aib-xyz"], env=fbd.env())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["state"], "OPEN")
+        self.assertEqual(payload["pr_url"], "https://github.com/owner/repo/pull/99")
+        self.assertEqual(payload["repo_source"], "review-bead")
+
+    def test_returned_pr_identity_mismatch_fails_closed(self) -> None:
+        for url in ("https://github.com/other/repo/pull/99",
+                    "https://github.com/owner/repo/pull/98", ""):
+            with self.subTest(url=url), FakeBinDir() as fbd:
+                self._make_bins(fbd, pr_url=url or "x")
+                result = run_script("resolve_review_context.py", ["--issue-id", "aib-xyz"], env=fbd.env())
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertEqual(json.loads(result.stderr)["error_code"], "pr-identity-mismatch")
+
+    def test_repo_argument_overrides_and_must_match_checkout(self) -> None:
+        with FakeBinDir() as fbd:
+            self._make_bins(fbd, description="Original implementation bead: aib-abc")
+            ok = run_script("resolve_review_context.py",
+                            ["--issue-id", "aib-xyz", "--repo", "Owner/Repo"], env=fbd.env())
+            wrong = run_script("resolve_review_context.py",
+                               ["--issue-id", "aib-xyz", "--repo", "other/repo"], env=fbd.env())
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        self.assertEqual(json.loads(ok.stdout)["repo_source"], "argument")
+        self.assertEqual(json.loads(wrong.stderr)["error_code"], "repo-mismatch")
+
+    def test_unrecorded_repository_falls_back_to_checkout(self) -> None:
+        with FakeBinDir() as fbd:
+            self._make_bins(fbd, description="Original implementation bead: aib-abc")
+            result = run_script("resolve_review_context.py", ["--issue-id", "aib-xyz"], env=fbd.env())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["repo_source"], "cwd")
+        self.assertEqual(payload["owner_repo"], "owner/repo")
+
+    def test_ambiguous_recorded_repository_fails(self) -> None:
+        with FakeBinDir() as fbd:
+            self._make_bins(fbd, description=(
+                "Original implementation bead: aib-abc\n"
+                "https://github.com/owner/repo/pull/99\nhttps://github.com/fork/repo/pull/99"))
+            result = run_script("resolve_review_context.py", ["--issue-id", "aib-xyz"], env=fbd.env())
+        self.assertEqual(json.loads(result.stderr)["error_code"], "ambiguous-pr-repository")
 
     def test_success_resolves_context_from_description(self) -> None:
         with FakeBinDir() as fbd:

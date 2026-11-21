@@ -171,6 +171,12 @@ Concrete invocation:
 CONTEXT_JSON=$(python3 "<loaded beads-pr-reviewer-worker package>/scripts/resolve_review_context.py" --issue-id "${ISSUE_ID}")
 ```
 
+The PR's repository comes from `--repo OWNER/REPO` when given, else from the PR
+URL recorded in the review bead (`repo_source` says which; `cwd` only when
+neither exists). The checkout must belong to that repository (`repo-mismatch`
+otherwise), and the PR read is scoped to it (`pr-identity-mismatch` if gh answers
+for another PR). Both are blocked, never readiness evidence.
+
 ### Phase 2: Prepare The Review Snapshot
 
 Run the helper in the isolated review worktree:
