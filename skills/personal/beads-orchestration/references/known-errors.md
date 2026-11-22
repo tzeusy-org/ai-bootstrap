@@ -2456,6 +2456,14 @@ beads (`bu-atsax`, `bu-m09qm`) whose prior coordinator session's heartbeat was
 - Observed: 2026-11-07, `aib-7fs` / PR5600 review frontier; collector-input defect,
   not a `bd` CLI version change.
 
+## bd worktree create can base a review on the common root HEAD
+
+Observed 2026-11-06: `bd -C <source-worktree> worktree create <new-path> --branch review/<id>` created the new branch at the common checkout HEAD, not the source worktree HEAD. Always verify the created HEAD before dispatch. For a newly created, clean, unlaunched branch whose exact old head and sole ownership are verified, explicitly switch that branch to the intended reviewed commit; preserve the failed enrollment and recovery receipt. Never do this to an existing authored or running checkout.
+
+## PR normalization mistakes descriptive agent branches for Beads
+
+Observed 2026-11-07: an owner-answer branch such as `agent/syzygy-pdja-answers-3` caused normalization to query a nonexistent canonical ID and stop admission. Do not create an alias Bead, rename a foreign branch, infer delivery ownership from a title, or suppress actual lookup failures. Automatic inference now accepts only the configured prefix plus one generated lowercase alphanumeric token and optional decimal dotted children; explicit tracker/review associations still support custom IDs. Canonical-looking missing IDs, real command failures and ambiguity remain partial/manual-triage gates. Exact two-file repair and independent review: `/home/orca/.tmp/syzygy-admission-exact-reviewed-installation-20261107/POST-INSTALL-RECONCILIATION.json`. Live success after unrelated PR merges is not causal proof; use the pinned regression fixtures.
+
 
 ## Needed retained prerequisites suppressed by unrelated known waits
 
@@ -2474,6 +2482,30 @@ Never exempt all prerequisite-tier actions or edit a snapshot to obtain real
 admission. After canonical delivery and reviewed installation, refresh complete
 Step 0 and use the unmodified stock queue plus atomic claims.
 
+
+## `bd update --claim` cannot be combined with conditional guards
+
+Observed with bd 1.3.1: combining `--claim` with `--if-assignee` or `--if-status` fails before mutation: “cannot combine --if-assignee/--if-status with --claim (--claim is already an atomic compare-and-set)”. Use `--claim` alone for atomic admission. Use the conditional flags for separate lifecycle updates; do not combine them with a claim.
+
+
+## `bd show` embeds live dependency records, not stable edge snapshots
+
+- **Observed:** 2026-11-08, bd 1.3.x on the shared Dolt server.
+- **Symptom:** after one intentional parent mutation, an untouched child's full
+  `bd show --json` differs under `dependencies`; an exact whole-row guard stops
+  before the next planned compare-and-swap. The embedded parent reflects new
+  status, assignee, notes, timestamps and cleared lease/heartbeat fields.
+- **Cause:** dependency entries include current referenced-issue fields. They
+  omit graph/revision/count fields present on a top-level `bd show` record, so
+  comparing an embedded record with that whole canonical record also fails.
+- **Recovery:** preserve the original helper's exit and completed mutation
+  journal; never replay completed writes. Re-read canonical state under custody.
+  Verify the child's own fields and `(id, dependency_type)` edge set unchanged,
+  every unaffected embedded record unchanged, and every shared field of the
+  one changed dependency equal to the verified intended canonical parent.
+  Validate omitted/extra record-shape keys explicitly. Then recheck registration
+  and `--if-assignee`/`--if-status`, and execute only the remaining mutation.
+  Unexpected referenced-issue changes still stop recovery.
 
 ## Active package branch and nested dependency identity (aib-1yq, aib-dxi)
 
