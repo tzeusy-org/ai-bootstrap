@@ -77,6 +77,16 @@ IFS=$'\x1f' read -r model effort thinking session cwd size ctx_pct used \
     ] | map(tostring) | join("\u001f")'
 )
 
+# Persist rate limits for later reading (atomic write; skipped when absent).
+if [ "$five_pct" != "-" ] || [ "$seven_pct" != "-" ]; then
+    rl_file="${CLAUDE_RATE_LIMITS_FILE:-$HOME/.claude/rate_limits.json}"
+    echo "$INPUT" | jq --argjson now "$(date +%s)" '{
+        updated_at: $now,
+        five_hour: (.rate_limits.five_hour // null),
+        seven_day: (.rate_limits.seven_day // null)
+    }' > "$rl_file.$$" 2>/dev/null && mv -f "$rl_file.$$" "$rl_file" || rm -f "$rl_file.$$"
+fi
+
 # Effective window: CLAUDE_CODE_AUTO_COMPACT_WINDOW caps it (stdin pct uses the full model window).
 win=${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}
 if [[ "$win" =~ ^[0-9]+$ ]] && [ "$win" -gt 0 ] && [ "$win" -lt "$size" ]; then
