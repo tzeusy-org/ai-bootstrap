@@ -44,10 +44,12 @@ Grafana **Admin**, so use it for reads; write only on an owner request.
 `--project-id` limits injection to that project; drop it if the variable is
 unset.
 
-orca: `BWS_ACCESS_TOKEN` and `BWS_PROJECT_ID` (dev project only) come from
-`~/.config/bws/agent.env`, which the Orca service loads; agents it spawns
-inherit them. In an interactive SSH shell as orca, `set -a; . ~/.config/bws/agent.env; set +a`
-first. The helper picks up `GRAFANA_VIEWER_TOKEN` when that project has one:
+orca: `BWS_ACCESS_TOKEN` and `BWS_PROJECT_ID` (dev project only) are in the
+Orca service's environment, loaded by systemd from the root-only
+`~/.config/bws/agent.env`; agents it spawns inherit them. A plain SSH shell
+as orca has neither and cannot read that file, so run credentialed reads
+from an Orca session. The helper picks up `GRAFANA_VIEWER_TOKEN` from the
+dev project:
 
 ```bash
 bws run --project-id "$BWS_PROJECT_ID" -- 'uv run <pkg>/scripts/lgtm.py doctor'
