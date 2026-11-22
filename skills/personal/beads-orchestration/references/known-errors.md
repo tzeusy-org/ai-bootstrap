@@ -2522,3 +2522,33 @@ Step 0 and use the unmodified stock queue plus atomic claims.
   reclaim, or treat successful metadata reconciliation as live queue admission.
   The [delivery model](delivery-model.md#cleanup-evidence-and-existing-active-journals)
   owns the protocol and its remaining delivery/installation boundaries.
+
+
+## Ranker `invalid-delivery-package` after a direct anchor unassignment
+
+Symptom: `rank_ready_work.py` returns fatal `invalid-delivery-package` /
+`packages` immediately after a blocked delivery anchor is unassigned directly.
+Cause: active `metadata.delivery` still names its original owner; package_index
+rejects the live anchor's different assignee (`delivery-owner-mismatch`).
+Do not release an active package with standalone assignee writes. Use the
+canonical `scripts/delivery_package.py release --repo-root ... --journal ...`
+while the package is still held. It marks the anchor manifest released and
+retires member pointers before relinquishing ownership, preserving statuses,
+code and evidence. A closed member stays closed. If the anchor was already
+unassigned, first verify there is no live foreign owner, guardedly reacquire
+the unassigned anchor in its existing status, then run the package release
+helper with the original active journal. Preserve failure receipts; rerun the
+complete ranker and verify errors are empty. Never force ownership or clear
+foreign metadata. Observed 2026-11-08, bd 1.3.1 (c1c4b642a).
+
+## Follow-up `agent/<id>-suffix` PR makes review normalization partial
+
+The open-PR discoverer parses the entire `agent/` suffix as a Beads ID. A follow-up branch such as `agent/hud-example.15-fix` is invalid even when anchor external_ref and review description identify the right bead. Use a non-`agent/` prefix for a new same-owner single-bead follow-up when the canonical branch is preserved as historical work. **Renaming the head branch of an open GitHub PR closes that PR**; do not assume it follows the rename. If this already happened, preserve the closed PR, create one replacement at the same published SHA, update the existing not-yet-executed canonical review and anchor association, and honor its actual cooldown. Source evidence remains bound to SHA/tree; no force push or duplicate source review is needed. A historical released multi-member delivery manifest also cannot validate as an active review package: archive it and remove the released `delivery` field from the active single-bead context rather than reenrolling a closed former member.
+
+## `bd worktree create` automatically tightens its new `.beads` directory
+
+Observed with the shared-checkout ACL guidance: `bd worktree create` prints `Fixed .beads permissions to 0700` for the new worktree, even when the repository root remains0770. Check both directory modes immediately and restore0770 for the new worktree (and root only if changed); do not follow the CLI0700 recommendation on this shared project. This is the worktree command itself, not an intentional operator chmod. Preserve group/ACL reviewer access.
+
+### Parent closure of a completed delegated review
+
+Observed bd on 2026-11-16: a parent lifecycle actor cannot `bd close` a completed review while its delegated reviewer remains the assignee (`assignee is ..., actor is ...`). After the reviewer has completed and returned custody, first use a guarded update with the exact delegated assignee and blocked status to return the review to the parent actor, then close the review before its implementation dependency. Do not use force or impersonate the delegated actor; preserve the independent receipt and reviewer identity.
