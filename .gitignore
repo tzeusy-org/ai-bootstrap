@@ -15,6 +15,10 @@
 .codex/thread-writer-locks
 .codex/.sandbox_migration
 .codex/skills
+.codex/.credentials.json
+.codex/mcp-oauth-locks/
+.codex/tui-thread-reference-capabilities/
+.codex/mention_usage.json
 .codex/installation_id
 .codex/sqlite
 .codex/vendor_imports
