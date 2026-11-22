@@ -123,6 +123,9 @@ boundary, topology, or contract change → resume at Gate 3 or 4; doctrine impac
 - Amend the artifact that governs the work: the active changeset the task came
   from, or the main spec when the correction is bookkeeping of
   already-observed behavior (spec-format.md routing rule).
+- Rewrite the requirement in place so it states the corrected intent in
+  present tense; never append a correction note beside the old wording
+  (spec-format § Present Tense, Not History).
 - ID discipline per `../../references/spec-format.md`: a modified requirement
   keeps its ID; genuinely new behavior takes the next free ID.
 - Record what changed and why in the driving bead/task notes, so the next

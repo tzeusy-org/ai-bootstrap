@@ -57,6 +57,8 @@ Four pillars live under `about/` (project self-knowledge, poetic names). `opensp
 
 Pillars form a **traceability chain** — Doctrine principle → RFC decision → Spec requirement → Code → Test. Topology cross-cuts all: *where* doctrine is embodied, contracts apply, specs are implemented, work lands. `craft-and-care` is the engineering-character cross-cut: who an engineer must be when changing this repo — explicit, careful, reviewable, observable, maintainable.
 
+**Pillar docs are present-tense state, not history.** Every pillar file states what the project is and intends *now*; a changed decision is rewritten in place. Audit trails — `legends-and-lore/decisions/`, the ideas ledger, changeset proposals, git — record how intent changed and may be cited, but never interleave with the stateful text (`X decided A; rectify to B…`).
+
 ## Quick Start: Assess Shape
 
 Run the scanner for a health report (which pillars exist, maturity, gaps):
@@ -141,6 +143,7 @@ For an existing project, assess cross-pillar coherence and keep docs current.
 3. **Gaps** — code with no spec? Specs with no doctrine? Design docs that never became specs?
 4. **Orphans** — doctrine principles no RFC references; RFC sections no spec covers.
 5. **Execution drift** — testing/observability/review/compatibility/documentation/dependency/maintenance standards out of sync with how the project is actually changed?
+6. **Tense** — stateful pillar docs carrying decision history (dated updates, "decided X, now Y", superseded wording kept inline)? Rewrite to present-tense intent; move the history to a decision record if it is worth keeping.
 
 **Maintenance protocol** when code diverges from docs:
 1. **Detect** — compare implementation against spec requirements, RFC contracts, doctrine.

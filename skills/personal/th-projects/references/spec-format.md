@@ -47,7 +47,7 @@ Authoritative routing rule:
 |---|---|
 | Propose or change observable behavior | Delta spec in an active changeset; human sign-off before implementation. |
 | Document behavior already observed in code | Main-spec bookkeeping edit, labeled `[Observed]`; no future-behavior claim. |
-| Correct ambiguity without changing behavior | Amend the governing active delta, or the main spec when no active delta governs it; record why. |
+| Correct ambiguity without changing behavior | Amend the governing active delta, or the main spec when no active delta governs it; record why in the bead or changeset, not in the spec. |
 
 Active (non-archived) changes override main specs — always check
 `openspec/changes/*/specs/` before extending a main spec, and build on an
@@ -95,6 +95,17 @@ A final `## Source References` is a non-operative grounding section: exactly one
 non-empty when present, no requirement/scenario bodies, and no later H2. Where
 repository instructions require it, every affected spec must contain it. This
 syntax check does not certify semantic applicability of a cited doctrine/RFC.
+
+## Present Tense, Not History
+
+Main and delta specs state intended behavior in present tense, as if it had
+always been the intent. An amendment rewrites the requirement in place; it
+never appends `Decided X → changed to Y` notes, dated corrections, or
+superseded wording kept for reference. A delta's `MODIFIED` block is the new
+full statement, not a diff narrative. Why a requirement changed lives in the
+changeset `proposal.md`/`design.md`, the bead, or a decision record, and in
+git history. A spec carrying decision history fails the Semantic Quality Gate
+(Concise).
 
 ## Requirement Block Ordering
 
@@ -170,7 +181,7 @@ A mechanically valid spec is not necessarily complete. Before sign-off, verify:
    interface accessibility/discoverability/loading/error behavior.
 3. **Concise** — requirements state intent once; scenarios add distinct cases,
    not paraphrases. Design and implementation detail live in their own
-   artifacts.
+   artifacts; so does decision history (§ Present Tense, Not History).
 4. **Bounded** — proposed changes record in-scope and out-of-scope behavior in
    the changeset proposal; no `TODO`, `TBD`, or unresolved `[Unknown]` remains in
    a `v1-mandatory` requirement at sign-off.

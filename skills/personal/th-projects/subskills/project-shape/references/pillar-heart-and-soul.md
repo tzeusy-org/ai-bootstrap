@@ -74,4 +74,4 @@ Add a domain file when a topic has principles that code must embody:
 Doctrine should be **slow to change** — it's constitutional. When doctrine evolves:
 1. The change must be discussed and agreed (not unilateral)
 2. All downstream artifacts (RFCs, specs) must be checked for alignment
-3. The version history should be preserved (git is sufficient)
+3. The doctrine text is rewritten in place to state current belief in present tense; its history lives in git and the amendment's decision record, never inline

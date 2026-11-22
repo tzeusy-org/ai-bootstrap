@@ -202,6 +202,10 @@ off to the owning workflow:
   relevant operational workflow—and provide the exact decision record;
 - require that workflow to remove only blockers actually satisfied by the
   recorded decision;
+- require that workflow to write the decision's *result* into stateful docs
+  (doctrine, specs, contracts) as present-tense intent, rewriting in place;
+  the packet is the audit trail, so no "owner decided X on <date>" text lands
+  in those docs;
 - retain every external, runtime, privileged, destructive, data-policy,
   deployment, and merge gate; the owning workflow must obtain any required
   explicit authorization separately from the questionnaire packet;

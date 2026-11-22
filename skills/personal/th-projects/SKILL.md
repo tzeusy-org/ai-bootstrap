@@ -161,6 +161,16 @@ rg -n "^name:|^description:" "$PKG"/subskills/*/SKILL.md
   owned by any single subskill. Its mechanical validator,
   [`scripts/spec-trace-check.py`](scripts/spec-trace-check.py), runs before any
   subagent spends tokens on semantic spec review.
+- **Stateful docs state current intent, in present tense.** Doctrine,
+  specs, RFCs/design contracts, topology, and standards describe what the
+  project *is and intends now* — never a log of how that intent changed.
+  Changing a decision rewrites the affected text in place so it reads as if
+  it had always said so; no `X decided Y; rectified to Z` streams, dated
+  "Update:"/"Correction:" notes, or struck-through prior positions. History
+  belongs in git, changeset `proposal.md`/`design.md`, bead notes, and
+  dedicated audit-trail files (`legends-and-lore/decisions/`, ideas ledger,
+  questionnaire packets), which may cite the stateful doc but never live
+  inside it.
 - Per-change spec sync: an implementation task that changes observable behavior
   amends its governing spec in the same task (feature-request amendment mode).
   Episodic reconciliation is the backstop, never the mechanism.

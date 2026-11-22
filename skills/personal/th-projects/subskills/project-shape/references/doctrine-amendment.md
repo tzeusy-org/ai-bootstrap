@@ -47,7 +47,10 @@ directly.
 Immediately after adoption, in the same session:
 
 1. Edit the doctrine file; keep numbered rules stable (amend text in place;
-   retire numbers rather than renumbering — citations depend on them).
+   retire numbers rather than renumbering — citations depend on them). The
+   amended principle reads in present tense as current doctrine — no
+   "previously…", "amended on…", or old-vs-new text in the file; that
+   belongs in the step 4 decision record.
 2. Walk the blast-radius list: re-align each RFC/design doc, and route spec
    impacts through a changeset (`openspec new change`), never silent spec
    edits.
@@ -68,5 +71,9 @@ ending the session.
   exactly this.
 - **Amendment-as-appeasement** — softening a rejection into a doctrine change
   the owner never actually wanted. Rejection is the funnel working.
+- **Doctrine-as-changelog** — appending the amendment beside the old
+  principle ("Update: we now…") instead of rewriting it. Readers must
+  reconstruct current doctrine from a history; the decision record already
+  holds that history.
 - **Sweep-later** — adopting the amendment and leaving downstream artifacts
   citing the old principle. Two truths, immediately.
