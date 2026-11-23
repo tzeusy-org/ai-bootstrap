@@ -7,9 +7,12 @@
 
 Report-only: emits one compact `beads-work-queue/v2` JSON envelope and never
 mutates Beads. `queue` is the capacity-bounded admission plan: P0 emergency,
-review, retained-owner correction/resume, then new implementation. Complete
-Step-0 normalization via `--review-state-file` is required for admissions;
-without it only diagnostic `candidates` are available. The coordinator still applies the dispatch-readiness and
+review, retained-owner correction/resume, then new implementation. Step-0
+normalization via `--review-state-file` is required for admissions; without
+it only diagnostic `candidates` are available. A supplied but incomplete,
+invalid or stale normalization degrades the queue to unclaimed implementation
+only, with the cause in `admission.reason`: review, correction and resume
+actions stay fail-closed, but one bad PR record does not idle every lane. The coordinator still applies the dispatch-readiness and
 cohesion gates and claims atomically; losing a claim race requires refreshing
 the queue. Every coordinator reading the same tracker gets the same order, so
 parallel coordinators converge on the same epics instead of each opening its
@@ -62,18 +65,22 @@ in `OWNER_GATE_LABELS`, or a same-head `held` canonical review receipt) and any
 claim whose coordinator has no live registration keep their claims but leave
 `owned`, listed under `capacity.owned_excluded` (`owner_gate`, `dead_owner`;
 additive to v2). Lanes keep working while the human acts; dead claims are
-adoptable, not held. Technical waits (CI, review, merge queue) still count. Running higher-priority work
-consumes slots without idling the rest; unadmitted peer-owned higher work
-requires owner resumption before unrelated admissions. An unhanded-off author
-is running work only with the normalizer's stable PR/branch/head proof and the
-same live in-progress owner, independently of CI status; its wiring warning
-remains visible without idling spare capacity.
+adoptable, not held. Technical waits (CI, review, merge queue) still count.
+A blocked item parks itself: anything this coordinator cannot run now (a
+peer's or dead owner's review, correction, resume or missing review wiring,
+an inconsistent review record) is listed in `admission.waiting` with its
+reason and owner, and never suppresses unrelated runnable work. Tier order
+and capacity alone decide what is admitted.
 One emergency or runnable prerequisite of retained parked work may overflow
 owned WIP by one when execution is free. At budget+1 no further overflow is
 admitted, even if that extra package parks. Execution never exceeds budget.
 Other `in_progress` assignees (humans) are counted under `other_claims` only.
 In-progress claims whose assignee has no live registration are listed under
-`unowned_claims`; their execution remains conservatively reserved until recovery.
+`unowned_claims` and reserve execution only until abandoned: once the newest
+of the bead heartbeats and the owner's registration expiry (the bead's last
+update when it never registered) is past the stall threshold, the claim stops
+holding a lane and is listed in `recoverable_claims` for guarded adoption. A
+missing heartbeat is not a veto; a malformed one is.
 
 Excluded from diagnostic candidates, with counts or ids in `excluded`:
 - epics themselves; claiming a programme does not hide its runnable
@@ -120,7 +127,7 @@ if str(PACKAGE_SCRIPTS) not in sys.path:
 from delivery_package import ID as DELIVERY_ID, metadata as bead_metadata, package_index
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from coordinator_registry import lane_budget, parse_time, registrations  # noqa: E402
+from coordinator_registry import claim_abandoned, lane_budget, parse_time, registrations  # noqa: E402
 from review_relation_graph import normalized_finding_relation_error
 
 SCHEMA = "beads-work-queue/v2"
@@ -340,13 +347,15 @@ def held_review_anchors(rows, review_state):
     return held
 
 
-def execution_capacity(rows, delivery_anchors, regs, budget, held_anchors=frozenset()):
+def execution_capacity(rows, delivery_anchors, regs, budget, held_anchors=frozenset(), *, now):
     """Claims survive waits; only running anchors/reviewers consume execution.
 
     Owned WIP bounds outcomes agents are building. A blocked owner-gated park
     (gate label or held review receipt) and any claim of a dead coordinator are
     not being built, so they keep their claims but leave `owned`; both are
-    reported under `owned_excluded`. Dead claims still reserve execution.
+    reported under `owned_excluded`. A dead in-progress claim reserves
+    execution only until it is abandoned (`claim_abandoned`); it is then
+    returned as recoverable and stops holding a lane.
     """
     groups = {}
     for row in rows.values():
@@ -354,7 +363,7 @@ def execution_capacity(rows, delivery_anchors, regs, budget, held_anchors=frozen
             continue
         anchor = delivery_anchors.get(row["id"], row["id"])
         groups.setdefault((text(row.get("assignee")), anchor), []).append(row)
-    active, owned, other, unowned = {}, set(), 0, []
+    active, owned, other, unowned, recoverable = {}, set(), 0, [], []
     excluded = {"owner_gate": set(), "dead_owner": set()}
     for (owner, anchor), members in groups.items():
         principal = rows.get(anchor, members[0])
@@ -374,10 +383,16 @@ def execution_capacity(rows, delivery_anchors, regs, budget, held_anchors=frozen
                 excluded["owner_gate"].add(anchor)
             if not (dead or gated):
                 owned.add((owner, anchor))
-        if running:
-            active[owner] = active.get(owner, 0) + 1
+        abandoned = False
         if not regs.get(owner, {}).get("live") and any(m.get("status") == "in_progress" for m in members):
             unowned.append(anchor)
+            abandoned = claim_abandoned(regs, owner, members, now)
+            if abandoned:
+                recoverable.append({"assignee": owner, "id": anchor,
+                                    "kind": "review" if review else "implementation",
+                                    "pr": text(principal.get("external_ref")) or None})
+        if running and not abandoned:
+            active[owner] = active.get(owner, 0) + 1
     for owner, entry in regs.items():
         if entry["live"] and entry["extra_lanes"]:
             active[owner] = active.get(owner, 0) + entry["extra_lanes"]
@@ -385,7 +400,7 @@ def execution_capacity(rows, delivery_anchors, regs, budget, held_anchors=frozen
     return {"by_assignee": dict(sorted(active.items())), "occupied": occupied,
             "free": max(budget - occupied, 0), "owned": len(owned),
             "free_wip": max(budget - len(owned), 0), "other_claims": other,
-            "owned_excluded": {key: sorted(ids)[:LIST_LIMIT] for key, ids in excluded.items()}}, unowned
+            "owned_excluded": {key: sorted(ids)[:LIST_LIMIT] for key, ids in excluded.items()}}, unowned, recoverable
 
 
 def admission_queue(candidates, rows, delivery_anchors, regs, capacity, review_state, *, coordinator, now, limit, ready_ids, budget):
@@ -394,37 +409,46 @@ def admission_queue(candidates, rows, delivery_anchors, regs, capacity, review_s
         return {"status": "blocked", "reason": reason, "waiting": [], "queue": []}
     if not isinstance(review_state, dict) or review_state.get("schema") != "beads-pr-review-normalization/v1":
         return blocked("review-state-required")
-    if review_state.get("status") not in {"success", "empty"} or review_state.get("errors") != []:
-        return blocked("review-state-incomplete")
-    findings, healing = review_state.get("findings"), review_state.get("self_heal_candidates")
-    if not isinstance(findings, list) or not isinstance(healing, list) or any(not isinstance(f, dict) for f in findings + healing):
-        return blocked("invalid-review-state")
-    for finding in findings:
-        if (finding.get("kind") not in {"original", "review-task"}
-                or not isinstance(finding.get("original_id"), str)
-                or not DELIVERY_ID.fullmatch(finding["original_id"])
-                or finding.get("context_status") != "resolved"
-                or finding.get("pr_state") not in {"OPEN", "MERGED", "CLOSED"}
-                or not isinstance(finding.get("pr_number"), int)
-                or isinstance(finding["pr_number"], bool) or finding["pr_number"] <= 0):
-            return blocked("invalid-review-state")
-    generated = parse_time(review_state.get("generated_at"))
-    if generated is None or generated > now:
-        return blocked("invalid-review-state-time")
-    if normalized_finding_relation_error(findings):
-        return blocked("invalid-review-relations")
+    # Unusable review evidence fails closed for review, correction and resume
+    # only. Unclaimed ready work needs none of it, so the queue degrades to
+    # implementation-only rather than idling every lane on one bad record.
+    def review_state_problem():
+        if review_state.get("status") not in {"success", "empty"} or review_state.get("errors") != []:
+            return "review-state-incomplete"
+        findings, healing = review_state.get("findings"), review_state.get("self_heal_candidates")
+        if not isinstance(findings, list) or not isinstance(healing, list) or any(not isinstance(f, dict) for f in findings + healing):
+            return "invalid-review-state"
+        for finding in findings:
+            if (finding.get("kind") not in {"original", "review-task"}
+                    or not isinstance(finding.get("original_id"), str)
+                    or not DELIVERY_ID.fullmatch(finding["original_id"])
+                    or finding.get("context_status") != "resolved"
+                    or finding.get("pr_state") not in {"OPEN", "MERGED", "CLOSED"}
+                    or not isinstance(finding.get("pr_number"), int)
+                    or isinstance(finding["pr_number"], bool) or finding["pr_number"] <= 0):
+                return "invalid-review-state"
+        generated = parse_time(review_state.get("generated_at"))
+        if generated is None or generated > now:
+            return "invalid-review-state-time"
+        if normalized_finding_relation_error(findings):
+            return "invalid-review-relations"
+        return None
+
     visible_reviews = {r["id"] for r in rows.values()
                        if r.get("status") != "closed" and "pr-review-task" in labels_of(r)}
-    seen_reviews = {f.get("review_id") for f in findings if f.get("kind") == "review-task"}
-    visible_originals = {r["id"] for r in rows.values() if r.get("status") == "blocked"
-                         and "pr-review" in labels_of(r) and "pr-review-task" not in labels_of(r)
-                         and text(r.get("external_ref")).startswith("gh-pr:")}
-    seen_originals = {f.get("original_id") for f in findings}
-    if not visible_reviews.issubset(seen_reviews) or not visible_originals.issubset(seen_originals):
-        return blocked("review-inventory-changed")
-    waiting, actions, pending_higher = [], [], False
-    # Keep ordinary spillover policy separate from proven dependent waits.
-    pending_prerequisite = False
+    degraded = review_state_problem()
+    findings, healing = ([], []) if degraded else (review_state["findings"], review_state["self_heal_candidates"])
+    if not degraded:
+        seen_reviews = {f.get("review_id") for f in findings if f.get("kind") == "review-task"}
+        visible_originals = {r["id"] for r in rows.values() if r.get("status") == "blocked"
+                             and "pr-review" in labels_of(r) and "pr-review-task" not in labels_of(r)
+                             and text(r.get("external_ref")).startswith("gh-pr:")}
+        seen_originals = {f.get("original_id") for f in findings}
+        if not visible_reviews.issubset(seen_reviews) or not visible_originals.issubset(seen_originals):
+            degraded, findings, healing = "review-inventory-changed", [], []
+    # A blocked item parks itself in `waiting`; it never suppresses unrelated
+    # runnable work. Tier order and capacity alone rank what is admitted.
+    waiting, actions = [], []
     active_finishing = any(r.get("status") == "in_progress" and
                            ("pr-review-task" in labels_of(r) or "review-correction" in labels_of(r))
                            for r in rows.values())
@@ -494,73 +518,10 @@ def admission_queue(candidates, rows, delivery_anchors, regs, capacity, review_s
                     return "external-blocker"
         return None
 
-    def known_terminal_gate(anchor, review_id):
-        """A proven dependent hold is not a runnable global reconciliation job."""
-        members = [member for member, package in delivery_anchors.items() if package == anchor] or [anchor]
-        owner = text(rows[anchor].get("assignee"))
-        for member in members:
-            record = rows.get(member)
-            if record is None or (record.get("status") != "closed" and text(record.get("assignee")) != owner):
-                return False
-        for identity in [*members, review_id]:
-            record = rows.get(identity)
-            if record is None or record.get("status") not in {"open", "blocked", "in_progress", "closed"}:
-                return False
-            if record.get("status") == "closed":
-                continue
-            dependencies = record.get("dependencies")
-            if not isinstance(dependencies, list) or any(not isinstance(dep, dict) for dep in dependencies):
-                return False
-            if any(dep.get("type") == "blocks" and (dep.get("issue_id") != identity
-                   or not isinstance(dep.get("depends_on_id"), str)
-                   or not DELIVERY_ID.fullmatch(dep["depends_on_id"])) for dep in dependencies):
-                return False
-            if any(target not in rows or rows[target].get("status") not in {"open", "blocked", "in_progress", "closed"}
-                   for target in blockers_of(record)):
-                return False
-        review = rows[review_id]
-        return bool(hard_gate(anchor, review_id) or labels_of(review) & HOLD_LABELS
-                    or any(rows[target].get("status") != "closed" for target in blockers_of(review)))
-
-    def running_review_binding(finding):
-        review = rows.get(finding.get("review_id"), {})
-        owner = text(review.get("assignee"))
-        return (finding.get("kind") == "review-task" and not finding.get("duplicate_of")
-                and finding.get("canonical_review_id") == finding.get("review_id")
-                and finding.get("review_id") in visible_reviews and finding.get("pr_state") == "OPEN"
-                and finding.get("context_status") == "resolved"
-                and isinstance(finding.get("head_sha"), str) and SHA_RE.fullmatch(finding["head_sha"])
-                and text(rows.get(finding.get("original_id"), {}).get("external_ref")) == f"gh-pr:{finding.get('pr_number')}"
-                and review.get("status") == "in_progress" and owner.startswith(COORDINATOR_PREFIX)
-                and regs.get(owner, {}).get("live"))
-
-    def running_author(event):
-        """Only fresh, unhanded-off author work makes its wiring advisory nonblocking."""
-        anchor = event.get("original_id")
-        record = rows.get(anchor, {}) if isinstance(anchor, str) else {}
-        owner = text(record.get("assignee"))
-        evidence = event.get("author_activity")
-        head = event.get("head_sha")
-        return (isinstance(evidence, dict) and event.get("canonical_review_id") is None
-                and event.get("recommendation") == "self-heal-original-and-review-wiring"
-                and event.get("context_status") == "resolved" and event.get("pr_state") == "OPEN"
-                and type(event.get("pr_number")) is int and event["pr_number"] > 0
-                and isinstance(head, str) and SHA_RE.fullmatch(head)
-                and evidence.get("head_sha") == head
-                and evidence.get("branch") == f"agent/{anchor}" and evidence.get("assignee") == owner
-                and record.get("status") == "in_progress" and not labels_of(record) & REVIEW_LABELS
-                and owner.startswith(COORDINATOR_PREFIX) and regs.get(owner, {}).get("live")
-                and text(record.get("external_ref")) in {"", f"gh-pr:{event['pr_number']}"}
-                and delivery_anchors.get(anchor, anchor) == anchor and not hard_gate(anchor)
-                and sum(item.get("original_id") == anchor for item in healing) == 1
-                and not any(f.get("original_id") == anchor for f in findings))
-
     def append_action(kind, anchor, review_id=None, candidate=None):
-        nonlocal pending_higher, pending_prerequisite
         record = rows.get(anchor)
         if record is None:
             waiting.append({"id": anchor, "reason": "anchor-unavailable"})
-            pending_higher = pending_prerequisite = True
             return
         owner = text(record.get("assignee"))
         if kind == "review" and package_running(anchor, rows, delivery_anchors):
@@ -574,16 +535,6 @@ def admission_queue(candidates, rows, delivery_anchors, regs, capacity, review_s
             return
         if kind in {"correction", "resume"} and (not owner or owner != coordinator):
             waiting.append({"id": anchor, "reason": "resume-existing-owner", "owner": owner})
-            pending_higher = True
-            # Only ordinary human OPEN backlog lacks a coordinator delivery
-            # action. A canonical correction or PR/package resume keeps priority
-            # regardless of how its existing owner's identity is spelled.
-            personal_backlog = (kind == "resume" and record.get("status") == "open" and owner
-                                and not owner.startswith(COORDINATOR_PREFIX)
-                                and anchor not in delivery_anchors and not labels_of(record) & REVIEW_LABELS
-                                and not text(record.get("external_ref")).startswith("gh-pr:"))
-            if not personal_backlog:
-                pending_prerequisite = True
             return
         if owner.startswith(COORDINATOR_PREFIX) and not regs.get(owner, {}).get("live"):
             waiting.append({"id": anchor, "reason": "owner-recovery-required", "owner": owner})
@@ -598,7 +549,6 @@ def admission_queue(candidates, rows, delivery_anchors, regs, capacity, review_s
                 return
         if kind == "review" and text(review.get("assignee")) not in {"", coordinator}:
             waiting.append({"id": review_id, "reason": "review-owned-by-peer", "owner": review.get("assignee")})
-            pending_higher = pending_prerequisite = True
             return
         if kind == "review" and review.get("status") == "in_progress":
             return
@@ -624,37 +574,39 @@ def admission_queue(candidates, rows, delivery_anchors, regs, capacity, review_s
         review_id, anchor = finding.get("review_id"), finding.get("original_id")
         if review_id not in visible_reviews:
             # A terminal record already reconciled out of the live inventory.
-            if finding.get("pr_state") in {"MERGED", "CLOSED"}:
-                continue
-            return blocked("review-inventory-changed")
+            if finding.get("pr_state") not in {"MERGED", "CLOSED"}:
+                waiting.append({"id": review_id, "reason": "review-inventory-changed"})
+            continue
+        # An inconsistent review parks that review alone; its anchor stays
+        # out of implementation through `review_anchors`.
         if finding.get("canonical_review_id") != review_id or finding.get("context_status") != "resolved":
-            return blocked("unresolved-review-state")
+            waiting.append({"id": review_id, "reason": "unresolved-review-state"})
+            continue
         if not isinstance(anchor, str) or anchor not in rows:
-            return blocked("review-anchor-unavailable")
+            waiting.append({"id": review_id, "reason": "review-anchor-unavailable"})
+            continue
         if finding.get("pr_state") != "OPEN":
             waiting.append({"id": review_id, "reason": "reconcile-terminal-pr"})
-            pending_higher = True
-            if not (text(rows[anchor].get("external_ref")) == f"gh-pr:{finding['pr_number']}"
-                    and isinstance(finding.get("head_sha"), str) and SHA_RE.fullmatch(finding["head_sha"])
-                    and known_terminal_gate(anchor, review_id)):
-                pending_prerequisite = True
             continue
         if rows[review_id].get("status") == "in_progress":
             active_finishing = True
             continue
         if text(rows[anchor].get("external_ref")) != f"gh-pr:{finding.get('pr_number')}":
-            return blocked("review-association-changed")
+            waiting.append({"id": review_id, "reason": "review-association-changed"})
+            continue
         head = finding.get("head_sha")
         if not isinstance(head, str) or not SHA_RE.fullmatch(head):
-            return blocked("review-head-unavailable")
+            waiting.append({"id": review_id, "reason": "review-head-unavailable"})
+            continue
         try:
             receipt = bead_metadata(rows[review_id]).get("review_receipt")
         except ValueError:
-            return blocked("invalid-review-receipt")
+            receipt = False
         if receipt is not None and (not isinstance(receipt, dict) or
                 not isinstance(receipt.get("head"), str) or not SHA_RE.fullmatch(receipt["head"]) or
                 receipt.get("disposition") not in {"ready", "corrections", "queued", "held"}):
-            return blocked("invalid-review-receipt")
+            waiting.append({"id": review_id, "reason": "invalid-review-receipt"})
+            continue
         if receipt and receipt["head"] == head:
             if receipt["disposition"] == "corrections":
                 append_action("correction", anchor, review_id)
@@ -665,30 +617,19 @@ def admission_queue(candidates, rows, delivery_anchors, regs, capacity, review_s
             waiting.append({"id": review_id, "reason": "review-cooldown"})
             continue
         if finding.get("recommendation") != "dispatch-canonical-review":
-            return blocked("review-reconciliation-required")
+            waiting.append({"id": review_id, "reason": "review-reconciliation-required"})
+            continue
         append_action("review", anchor, review_id)
-    for finding in findings:
-        if finding.get("kind") == "original" and finding.get("original_id") in rows and not finding.get("canonical_review_id"):
-            waiting.append({"id": finding["original_id"], "reason": "review-wiring-required"})
-            pending_higher = pending_prerequisite = True
-    running_bindings = {(f["original_id"], f["review_id"], f["pr_number"])
-                        for f in findings if running_review_binding(f)}
-    pending_wiring = [event for event in healing if event.get("recommendation") != "review-wiring-current"]
-    if pending_wiring:
-        waiting.append({"id": None, "reason": "review-wiring-required"})
-    # Proven author work already occupies execution/WIP. Its missing
-    # review wiring stays visible without inventing an unstarted global job.
-    pending_wiring = [event for event in pending_wiring if not running_author(event)]
-    if pending_wiring:
-        pending_higher = True
-        if any(not (event.get("recommendation") == "self-heal-original-wiring"
-                    and event.get("context_status") == "resolved"
-                    and isinstance(event.get("original_id"), str)
-                    and isinstance(event.get("canonical_review_id"), str)
-                    and type(event.get("pr_number")) is int
-                    and (event.get("original_id"), event.get("canonical_review_id"), event.get("pr_number")) in running_bindings)
-               for event in pending_wiring):
-            pending_prerequisite = True
+    # Missing review wiring is repaired by the anchor's holder (or its adopter
+    # once the holder is dead). It waits by anchor and gates nothing else.
+    unwired = {finding["original_id"] for finding in findings
+               if finding.get("kind") == "original" and finding.get("original_id") in rows
+               and not finding.get("canonical_review_id")}
+    unwired |= {event.get("original_id") for event in healing
+                if event.get("recommendation") != "review-wiring-current"}
+    for anchor in sorted(unwired, key=text):
+        waiting.append({"id": anchor, "reason": "review-wiring-required",
+                        "owner": text(rows.get(anchor, {}).get("assignee")) or None})
     for candidate in candidates:
         record = rows[candidate["id"]]
         if record["id"] in review_anchors:
@@ -706,9 +647,10 @@ def admission_queue(candidates, rows, delivery_anchors, regs, capacity, review_s
     for anchor in sorted(resume_anchors):
         if anchor not in review_anchors and rows[anchor].get("status") == "open":
             append_action("resume", anchor)
-    if pending_higher:
-        actions = [action for action in actions if action["kind"] != "implementation" or action["_tier"] == 0
-                   or (action["_tier"] == 4 and not pending_prerequisite)]
+    if degraded:
+        waiting.append({"id": None, "reason": degraded})
+        actions = [action for action in actions if action["kind"] == "implementation"
+                   and not text(rows[action["id"]].get("external_ref")).startswith("gh-pr:")]
     actions.sort(key=lambda a: (a["_tier"], a["_order"], a["id"]))
     free, wip, owned = capacity["free"], capacity["free_wip"], capacity["owned"]
     selected = []
@@ -726,8 +668,10 @@ def admission_queue(candidates, rows, delivery_anchors, regs, capacity, review_s
                 wip -= 1
             owned += 1
         selected.append({key: value for key, value in action.items() if not key.startswith("_")})
-    return {"status": "ready" if selected else "busy" if actions or active_finishing else "waiting" if waiting else "empty",
-            "reason": None, "waiting": waiting, "queue": selected}
+    status = "ready" if selected else "busy" if actions or active_finishing else "waiting" if waiting else "empty"
+    if degraded and not selected:
+        status = "blocked"
+    return {"status": status, "reason": degraded, "waiting": waiting, "queue": selected}
 
 def rank(
     snapshot: dict[str, Any],
@@ -813,8 +757,8 @@ def rank(
     # Owned work remains visible while blocked/open anchors lend their execution
     # slot to independent review. Never infer session retirement from parking.
     budget, budget_source = lane_budget(snapshot["kv"], lanes)
-    capacity, unowned = execution_capacity(rows, delivery_anchors, regs, budget,
-                                           held_review_anchors(rows, review_state))
+    capacity, unowned, recoverable = execution_capacity(rows, delivery_anchors, regs, budget,
+                                                        held_review_anchors(rows, review_state), now=now)
     by_assignee = capacity["by_assignee"]
     orphaned = []
     counted_epics = set()
@@ -1151,6 +1095,7 @@ def rank(
         "held": held[:LIST_LIMIT],
         "held_total": len(held),
         "orphaned_blocked": sorted(orphaned, key=lambda entry: entry["id"])[:LIST_LIMIT],
+        "recoverable_claims": sorted(recoverable, key=lambda entry: entry["id"])[:LIST_LIMIT],
         "queue": admission["queue"],
         "queue_total": len(admission["queue"]),
         "schema": SCHEMA,

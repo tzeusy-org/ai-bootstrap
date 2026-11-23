@@ -96,6 +96,15 @@ an explicit lifecycle owner.
 
 ## Wait and report
 
+Park, don't block: a bead waiting on review, CI, a dependency or an owner goes
+to `blocked` with its resume event, and this lane takes the next admitted
+action. An empty queue beside remaining candidates, dead peers' claims or
+unwired PRs is a fault this lane repairs through the
+[never-idle ladder](../beads-coordinator/references/runtime-and-safety.md#never-idle-with-runnable-work)
+(refresh, park own waits, adopt the dead, repair what is now yours, review,
+shape), not a reason to stop. Stop only at the genuine frontier it defines,
+after parking every `in_progress` claim.
+
 Use event-driven continuation for CI/review/dependency/owner events, with the
 bounded fallback/stop rule in runtime safety. Use the same review-first admission queue in either mode; mode filters capability,
 not global priority. Retained claims do not consume parked execution slots. Only

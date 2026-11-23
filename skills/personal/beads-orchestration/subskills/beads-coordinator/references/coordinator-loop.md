@@ -227,8 +227,10 @@ uv run scripts/rank_ready_work.py --repo-root "$REPO_ROOT" \
 
 The module docstring owns `beads-work-queue/v2`. Dispatch only from `queue` and
 its `admission` decision, never diagnostic `candidates`, raw `bd ready`, or a
-mode-specific side queue. Missing/partial/inconsistent review evidence permits
-no dispatch. Refresh changed state before acting; no extra whole-fleet scan is
+mode-specific side queue. A missing review-state file permits no dispatch; a
+degraded one (`admission.reason` set) admits unclaimed implementation only.
+Items in `admission.waiting` are parked with their reason and owner; they
+never hold back the rest of `queue`. Refresh changed state before acting; no extra whole-fleet scan is
 needed just to re-read a verdict. Priority ordering occurs before the output
 limit, so a candidate cutoff cannot hide review work. A failed claim/race refreshes
 admission before choosing another item.
@@ -429,11 +431,12 @@ Wake on review/CI/dependency/owner events, with the bounded fallback and no-prog
 frontier in `runtime-and-safety.md`. Renew registry using
 `coordinator_registry.py register`; on exit use `coordinator_registry.py deregister`.
 Do not rescan the fleet or re-run broad verdicts just because a session woke up.
-A nonempty diagnostic candidates list is not runnable admission. If queue is empty
-because execution/WIP capacity or a real gate prevents work, resume on the named
-event with bounded fallback, rather than repeatedly waking to inspect the same list.
-At a frontier, classify your actual blocked work under decision-autonomy; resolve
-engineering choices, preserve owner hard gates, then stop at the bounded no-op limit.
+A nonempty diagnostic candidates list is not runnable admission, but an empty
+queue beside one is a fault to repair: work the
+[never-idle ladder](runtime-and-safety.md#never-idle-with-runnable-work) before
+any wait or stop. Only when it changes nothing, and execution/WIP capacity or a
+real gate prevents work, resume on the named event with bounded fallback rather
+than repeatedly waking to inspect the same list, and stop at the bounded no-op limit.
 
 Report meaningful state changes: accepted outcome and remaining acceptance,
 package anchor/members/PR, merged source vs verified runtime vs partial/planning,

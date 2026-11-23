@@ -8,10 +8,15 @@ introduce an alternate batch framework.
 
 Run the shared ranker with Step 0's current `--review-state-file` and select from
 its admitted `queue`, retaining the existing owner for correction/resume actions.
-An implement-mode session cannot jump over queued review work simply because it
-cannot review its own code: wake/notify an independent reviewer, park and wait if
-needed. Mode is a capability filter, not a separate priority queue. Missing or
-partial review state admits nothing. Prefer existing-owner corrections/resume and
+A bead that cannot move is parked, never waited on: park it `blocked` with its
+resume event and take the next admitted action. For queued review of your own
+content, dispatch or notify an independent reviewer, park that anchor, and keep
+working other admitted beads. Mode is a capability filter, not a separate
+priority queue. A missing review-state file admits nothing; a degraded one
+still admits unclaimed implementation. When `queue` is empty but candidates or
+recoverable claims remain, work the
+[never-idle ladder](../../beads-coordinator/references/runtime-and-safety.md#never-idle-with-runnable-work)
+before waiting or stopping. Prefer existing-owner corrections/resume and
 runnable prerequisites before a new outcome. Inspect governing adoption, current
 source assumptions, claims and rollback cohesion. Missing authority blocks its
 dependent slice; missing packet content goes to bounded shaping, not silent scope

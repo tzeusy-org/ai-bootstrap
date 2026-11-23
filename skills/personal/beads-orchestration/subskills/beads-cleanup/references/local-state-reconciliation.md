@@ -35,7 +35,8 @@ back to heartbeats alone.
 | Unpublished work exists | `preserve-unpublished-work` |
 | Package metadata with dead owner | `recover-package`; inspect journal, anchor branch and every member together |
 | Stale heartbeat with complete negative evidence | `release-claim-candidate` for coordinator verification |
-| Missing or malformed heartbeat | `manual-triage` |
+| No heartbeat, dead `coordinator:` owner, and its registration expiry (else the bead's last update) past the stall threshold | `release-claim-candidate` |
+| Malformed heartbeat, or no heartbeat without that evidence | `manual-triage` |
 
 Never turn a failed Git probe into a release recommendation. If another actor
 has a fresh heartbeat, report manual triage and leave ownership unchanged. A

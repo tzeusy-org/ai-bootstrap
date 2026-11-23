@@ -67,6 +67,9 @@ RENEW_MARGIN = timedelta(minutes=5)
 # No legitimate registration reaches this far ahead (the longest wake is 60
 # minutes plus grace), so a value beyond it is a bad write and is not live.
 MAX_AHEAD = timedelta(hours=3)
+# A dead owner's claim is adoptable once its newest liveness evidence is this
+# old (`references/runtime-and-safety.md`, "Heartbeat and stall parameters").
+STALL_THRESHOLD = timedelta(minutes=30)
 RUNTIME_RE = re.compile(r"[a-z][a-z0-9-]{0,15}\Z")
 # Seconds slept between attempts of a `bd` call that hit a transient server
 # error; three attempts in all. Tests patch `sleep`.
@@ -144,6 +147,38 @@ def registrations(kv: dict[str, Any], now: datetime) -> dict[str, dict[str, Any]
             "live": expires is not None and now < expires <= now + MAX_AHEAD,
         }
     return found
+
+
+def claim_abandoned(regs: dict[str, dict[str, Any]], owner: object, records: list[dict[str, Any]], now: datetime) -> bool:
+    """Whether a dead owner's claim is past the stall threshold, hence adoptable.
+
+    Evidence is every canonical bead heartbeat plus the owner's registration
+    expiry, or the records' `updated_at` when no usable expiry exists. A missing
+    heartbeat is not a veto: a session that died before its first heartbeat
+    must not hold a lane forever. A live owner, a malformed heartbeat, a
+    non-coordinator claim without a heartbeat, or no parseable evidence is
+    never abandoned.
+    """
+    if not isinstance(owner, str) or not owner:
+        return False
+    entry = regs.get(owner)
+    if entry and entry["live"]:
+        return False
+    evidence: list[datetime | None] = []
+    for record in records:
+        notes = record.get("notes") if isinstance(record.get("notes"), str) else ""
+        beats = HEARTBEAT_FIELDS_RE.findall(notes)
+        if not beats and HEARTBEAT_TAG_RE.search(notes):
+            return False
+        evidence.extend(parse_time(stamp) for _, stamp in beats)
+    if not owner.startswith("coordinator:") and not evidence:
+        return False
+    expiry = parse_time(entry["expires_at"]) if entry else None
+    if expiry is not None and expiry <= now:
+        evidence.append(expiry)
+    else:
+        evidence.extend(parse_time(record.get("updated_at")) for record in records)
+    return bool(evidence) and all(stamp is not None and now - stamp >= STALL_THRESHOLD for stamp in evidence)
 
 
 def live_coordinator_ids(kv: dict[str, Any], now: datetime) -> set[str]:

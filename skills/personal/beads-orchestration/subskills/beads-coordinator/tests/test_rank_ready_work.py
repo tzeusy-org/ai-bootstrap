@@ -223,10 +223,12 @@ class AdmissionPriorityTests(unittest.TestCase):
                     lanes = 4
                 before = json.dumps((rows, state), sort_keys=True)
                 payload = self.plan(rows, state, lanes=lanes)
-                expected = ["bd-new"] if case in {"live", "bound-ref"} else []
+                # Unwired author work waits by anchor; it never idles a free lane.
+                expected = [] if case == "full" else ["bd-new"]
                 self.assertEqual([item["id"] for item in payload["queue"]], expected)
                 self.assertEqual(payload["capacity"]["occupied"], 0 if case == "parked" else 1)
-                self.assertIn({"id": None, "reason": "review-wiring-required"}, payload["admission"]["waiting"])
+                self.assertIn({"id": author["id"], "reason": "review-wiring-required", "owner": author["assignee"]},
+                              payload["admission"]["waiting"])
                 self.assertLessEqual(len(payload["queue"]), payload["capacity"]["free"])
                 self.assertEqual(json.dumps((rows, state), sort_keys=True), before)
 
@@ -343,18 +345,18 @@ class AdmissionPriorityTests(unittest.TestCase):
         foreign = self.plan(rows + [prerequisite], normalized((anchor, review)), lanes=1)
         self.assertEqual(foreign["queue"], [])
 
-    def test_queued_peer_reviewer_requires_resumption_before_new_work_without_stealing_claim(self):
+    def test_queued_peer_reviewer_waits_without_blocking_new_work_or_losing_its_claim(self):
         anchor, review, rows = review_pair()
         review["assignee"] = "coordinator:r"
         payload = self.plan(rows + [bead("bd-new")], normalized((anchor, review)), lanes=2)
-        self.assertEqual(payload["queue"], [])
+        self.assertEqual([action["id"] for action in payload["queue"]], ["bd-new"])
         self.assertIn({"id": review["id"], "reason": "review-owned-by-peer", "owner": "coordinator:r"},
                       payload["admission"]["waiting"])
         self.assertEqual(review["assignee"], "coordinator:r")
         emergency = self.plan(rows + [bead("bd-fire", priority=0)], normalized((anchor, review)), lanes=2)
         self.assertEqual([action["id"] for action in emergency["queue"]], ["bd-fire"])
 
-    def test_needed_prerequisites_distinguish_known_waits_from_queued_or_unknown_barriers(self):
+    def test_needed_prerequisites_are_admitted_past_peer_waits_but_not_past_their_own_gates(self):
         cases = (
             "healthy", "terminal-owner-gate", "human-backlog", "running-peer-wiring", "combined",
             "terminal-clear", "terminal-unknown-gate", "terminal-unknown-head", "terminal-wrong-association", "queued-peer-review", "queued-peer-correction",
@@ -364,8 +366,12 @@ class AdmissionPriorityTests(unittest.TestCase):
             "held-prerequisite", "unknown-prerequisite", "capacity-full", "overflow-full",
             "local-review-first", "human-canonical-correction", "human-pr-resume", "human-formal-correction",
         )
-        allowed = {"healthy", "terminal-owner-gate", "human-backlog", "running-peer-wiring", "combined",
-                   "local-review-first"}
+        spillover = {"healthy", "terminal-owner-gate", "human-backlog", "running-peer-wiring", "combined",
+                     "local-review-first"}
+        # A peer's or dead owner's pending work parks itself. Only the
+        # prerequisite's own gate, invalid state, or capacity refuses it.
+        allowed = set(cases) - {"own-held", "foreign-prerequisite", "held-prerequisite",
+                                "unknown-prerequisite", "capacity-full", "overflow-full"}
         for case in cases:
             with self.subTest(case=case):
                 prerequisite = bead("bd-needed", priority=3)
@@ -448,13 +454,16 @@ class AdmissionPriorityTests(unittest.TestCase):
                 if case == "capacity-full":
                     lanes = 1
                 # Known waits must not newly admit ordinary tier5 spillover.
-                if case in allowed - {"healthy", "local-review-first"}:
+                if case in spillover - {"healthy", "local-review-first"}:
                     rows.append(bead("bd-unrelated", priority=1))
                 before = json.dumps((rows, state), sort_keys=True)
                 payload = self.plan(rows, state, lanes=lanes)
                 expected = [prerequisite["id"]] if case in allowed else []
                 if case == "local-review-first":
                     expected.insert(0, review["id"])
+                if case == "human-backlog":
+                    # A human's own backlog holds no WIP and gates nothing.
+                    expected.append("bd-unrelated")
                 if case == "own-held":
                     # An owner-gated retained package frees its WIP slot: the
                     # bead is ordinary admission, not a prerequisite exception.
@@ -482,17 +491,26 @@ class AdmissionPriorityTests(unittest.TestCase):
         self.assertEqual(payload["candidates"], [])
         self.assertEqual(payload["status"], "ok")
 
-    def test_missing_partial_and_stale_review_evidence_never_becomes_an_empty_priority_lane(self):
+    def test_unusable_review_evidence_degrades_to_unclaimed_implementation_only(self):
         anchor, review, rows = review_pair()
-        bad_states = [None, {**normalized(), "status": "partial", "errors": [{"code": "unavailable"}]}, normalized(),
-                      {**normalized((anchor, review)), "findings": []},
-                      {**normalized(), "findings": [{"kind": "original"}]}]
-        for state in bad_states:
-            with self.subTest(state=state):
-                payload = self.plan(rows + [bead("bd-new")], state)
-                self.assertEqual(payload["queue"], [])
-                self.assertEqual(payload["admission"]["status"], "blocked")
-                self.assertEqual(queue_ids(payload), ["bd-new"])
+        missing = self.plan(rows + [bead("bd-new")], None)
+        self.assertEqual(missing["queue"], [])
+        self.assertEqual(missing["admission"]["reason"], "review-state-required")
+        bad_states = {"review-state-incomplete": {**normalized(), "status": "partial", "errors": [{"code": "unavailable"}]},
+                      "review-inventory-changed": normalized(),
+                      "invalid-review-state": {**normalized(), "findings": [{"kind": "original"}]}}
+        for reason, state in bad_states.items():
+            with self.subTest(reason=reason):
+                # The review is not dispatched on evidence that cannot be trusted,
+                # and a bead already carrying a PR is not started a second time.
+                payload = self.plan(rows + [bead("bd-new"), bead("bd-has-pr", external_ref="gh-pr:9")], state)
+                self.assertEqual([action["id"] for action in payload["queue"]], ["bd-new"])
+                self.assertEqual(payload["admission"]["status"], "ready")
+                self.assertEqual(payload["admission"]["reason"], reason)
+                self.assertIn({"id": None, "reason": reason}, payload["admission"]["waiting"])
+                idle = self.plan(rows, state)
+                self.assertEqual(idle["queue"], [])
+                self.assertEqual(idle["admission"]["status"], "blocked")
 
     def test_unchanged_content_receipt_waits_without_new_review_and_changed_head_invalidates_it(self):
         anchor, review, rows = review_pair()
@@ -531,8 +549,10 @@ class AdmissionPriorityTests(unittest.TestCase):
         self.assertEqual(held["queue"], [])
         anchor["dependencies"] = []
         review["metadata"] = {"review_receipt": {"head": SHA, "disposition": "complete"}}
-        invalid = self.plan(rows, normalized((anchor, review)))
-        self.assertEqual(invalid["admission"]["status"], "blocked")
+        # A malformed receipt parks that review; unrelated ready work still runs.
+        invalid = self.plan(rows + [bead("bd-independent")], normalized((anchor, review)))
+        self.assertIn({"id": review["id"], "reason": "invalid-review-receipt"}, invalid["admission"]["waiting"])
+        self.assertEqual([a["id"] for a in invalid["queue"]], ["bd-independent"])
 
     def test_collector_supplies_review_prerequisites_without_weakening_gates(self):
         cases = (
@@ -1088,11 +1108,43 @@ class ParallelCoordinatorTests(unittest.TestCase):
 
         self.assertEqual(payload["capacity"]["budget"], 5)
         self.assertEqual(payload["capacity"]["budget_source"], "kv")
-        self.assertEqual(payload["capacity"]["occupied"], 3)
-        self.assertEqual(payload["capacity"]["free"], 2)
+        # The dead claim is an hour past expiry: recoverable, no longer a lane.
+        self.assertEqual(payload["capacity"]["occupied"], 2)
+        self.assertEqual(payload["capacity"]["free"], 3)
         self.assertEqual(payload["unowned_claims"], ["bd-x"])
+        self.assertEqual(payload["recoverable_claims"],
+                         [{"assignee": "coordinator:dead", "id": "bd-x", "kind": "implementation", "pr": None}])
         self.assertEqual([entry["id"] for entry in payload["coordinators"]], ["coordinator:a", "coordinator:b"])
         self.assertEqual(payload["self"], {"id": "coordinator:a", "lanes": 1, "live": True, "registered": True})
+
+    def test_dead_claim_reserves_its_lane_only_until_the_stall_threshold(self) -> None:
+        live, epics = self.live_with_three_claims()
+        dead = next(row for row in live if row["id"] == "bd-x")
+        beat = "[beads-heartbeat]\nowner=coordinator:dead\nlast_heartbeat_at={}\n[/beads-heartbeat]"
+
+        def plan(expiry=None):
+            kv = {"beads.max_lanes": "5"}
+            if expiry:
+                kv["beads.coordinator.coordinator:dead"] = json.dumps({"expires_at": expiry})
+            payload = ranking.rank(snapshot(live, epics, kv), now=NOW)
+            return payload["capacity"]["occupied"], [entry["id"] for entry in payload["recoverable_claims"]]
+
+        # Expired ten minutes ago: still inside the threshold.
+        self.assertEqual(plan("2026-10-27T03:50:00Z"), (3, []))
+        # Long expired with no heartbeat at all: a missing heartbeat is no veto.
+        self.assertEqual(plan("2026-10-27T03:00:00Z"), (2, ["bd-x"]))
+        # A fresh or malformed heartbeat keeps the claim.
+        dead["notes"] = beat.format("2026-10-27T03:55:00Z")
+        self.assertEqual(plan("2026-10-27T03:00:00Z"), (3, []))
+        dead["notes"] = "[beads-heartbeat] garbled"
+        self.assertEqual(plan("2026-10-27T03:00:00Z"), (3, []))
+        # Never registered: the bead's last update is the evidence.
+        dead["notes"] = None
+        self.assertEqual(plan(), (3, []))
+        dead["updated_at"] = "2026-10-27T03:45:00Z"
+        self.assertEqual(plan(), (3, []))
+        dead["updated_at"] = "2026-10-27T03:00:00Z"
+        self.assertEqual(plan(), (2, ["bd-x"]))
 
     def test_live_registration_extra_lanes_count_as_occupied(self) -> None:
         live, epics = self.live_with_three_claims()
@@ -1103,9 +1155,9 @@ class ParallelCoordinatorTests(unittest.TestCase):
 
         payload = ranking.rank(snapshot(live, epics, kv), now=NOW, lanes=6)
 
-        self.assertEqual(payload["capacity"]["occupied"], 5)
+        self.assertEqual(payload["capacity"]["occupied"], 4)
         self.assertEqual(payload["capacity"]["by_assignee"]["coordinator:a"], 3)
-        self.assertEqual(payload["capacity"]["free"], 1)
+        self.assertEqual(payload["capacity"]["free"], 2)
 
     def test_flag_overrides_kv_budget_and_free_never_goes_negative(self) -> None:
         live, epics = self.live_with_three_claims()

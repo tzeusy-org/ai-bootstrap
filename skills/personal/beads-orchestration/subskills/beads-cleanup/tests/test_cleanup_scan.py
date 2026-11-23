@@ -2231,6 +2231,21 @@ class AcceptedBranchCleanupTests(unittest.TestCase):
             worktree_names=set(), branch_path_ids={}, ambiguous_worktree_ids=set(),
             live_owners=set(live), now=self.scan.parse_time("2026-08-14T04:00:00Z"), errors=errors)[0]
 
+    def test_dead_claim_without_heartbeat_is_released_on_expired_registration(self):
+        from unittest.mock import patch
+        row = bead("aib-solo", "in_progress", assignee="coordinator:gone")
+
+        def recommend(expires_at):
+            registry = {"coordinator:gone": {"expires_at": expires_at, "extra_lanes": 0, "live": False}}
+            with patch.object(self.scan, "record_remote_branch", return_value=(False, None)):
+                return self.scan.scan_claims([row], repo_root=Path("/absent/private-fixture"),
+                    worktree_names=set(), branch_path_ids={}, ambiguous_worktree_ids=set(), live_owners=set(),
+                    now=self.scan.parse_time("2026-08-14T04:00:00Z"), errors=[], registry=registry)[0]["recommendation"]
+
+        self.assertEqual(recommend("2026-08-14T03:00:00Z"), "release-claim-candidate")
+        # Inside the stall threshold the claim still needs a human look.
+        self.assertEqual(recommend("2026-08-14T03:50:00Z"), "manual-triage")
+
     def test_accepted_branch_reaches_both_claim_and_worktree_probes(self):
         from unittest.mock import patch
         delivery, anchor, member = self.rows()

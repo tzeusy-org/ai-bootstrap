@@ -24,7 +24,7 @@ CANONICAL_COORDINATOR_SCRIPTS = (
 if str(CANONICAL_COORDINATOR_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(CANONICAL_COORDINATOR_SCRIPTS))
 
-from coordinator_registry import classify_failure, live_coordinator_ids  # noqa: E402
+from coordinator_registry import claim_abandoned, classify_failure, live_coordinator_ids, registrations  # noqa: E402
 from review_relation_graph import normalized_finding_relation_error  # noqa: E402
 
 PACKAGE_SCRIPTS = Path(__file__).resolve().parents[3] / "scripts"
@@ -908,6 +908,7 @@ def scan_claims(
     live_owners: set[str],
     now: datetime,
     errors: list[dict[str, str]],
+    registry: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     if records is None:
         return []
@@ -946,7 +947,10 @@ def scan_claims(
             # A dead session may have completed only some members. The package
             # journal + anchor branch decide recovery; never strand siblings.
             recommendation = "recover-package"
-        elif beat == "stale":
+        elif beat == "stale" or (beat == "missing" and registry is not None
+                                 and claim_abandoned(registry, record.get("assignee"), [record], now)):
+            # A dead coordinator's claim with no heartbeat is released on its
+            # expired registration (or last update), not left to hold a lane.
             recommendation = "release-claim-candidate"
         else:
             recommendation = "manual-triage"
@@ -1291,6 +1295,7 @@ def scan(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         branch_path_ids=branch_path_ids,
         ambiguous_worktree_ids=ambiguous_worktree_ids,
         live_owners=live_owners,
+        registry=registrations(registry_payload, now) if isinstance(registry_payload, dict) else None,
         now=now,
         errors=errors,
     )

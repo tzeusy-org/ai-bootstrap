@@ -77,8 +77,8 @@ renewal instead of paying one `bd update` per mutation):
 Ownership rule:
 - If the `assignee` is another actor, do not touch the bead — its claim wins.
 - A bead held by another actor is adoptable only under "Parallel Coordinators"
-  → "Adopt the dead, guarded": no live registration for its assignee, and a
-  bead heartbeat past the stall threshold. Plain `--claim` refuses a populated
+  → "Adopt the dead, guarded": no live registration for its assignee, and its
+  liveness evidence past the stall threshold. Plain `--claim` refuses a populated
   assignee anyway (`../../../references/known-errors.md`).
 - Never "win" a live foreign claim by writing a newer timestamp; the heartbeat
   does not arbitrate ownership.
@@ -140,8 +140,9 @@ below stops one coordinator from duplicating or undoing another's work.
   claim whose coordinator has no live registration. Lanes keep working on other
   ready work while the human acts; dead claims are adoptable under the guarded
   rule below, not held. Technical waits (CI, review, merge queue) and every
-  `in_progress` anchor still count, and a dead `in_progress` claim still
-  reserves execution until recovery.
+  `in_progress` anchor still count. A dead `in_progress` claim reserves
+  execution only until the stall threshold; the ranker then lists it in
+  `recoverable_claims` and stops counting its lane.
   The same budget bounds new-outcome WIP; reviewers and corrections of an existing
   package need an execution slot, not a second implementation-WIP slot. This admits
   independent review even when every implementation owner is parked, including
@@ -162,12 +163,17 @@ below stops one coordinator from duplicating or undoing another's work.
   then existing-owner corrections/resumes, before admitting new implementation.
   Priority applies to queued work: once higher-class actions are admitted/running,
   spare execution and WIP capacity can admit disjoint work. One running review is
-  not a fleet-wide idle barrier. Active jobs finish or reach a safe checkpoint;
+  not a fleet-wide idle barrier. Neither is anything this coordinator cannot
+  run: a peer's or dead owner's pending review, correction, resume or missing
+  review wiring parks in `admission.waiting` with its reason and owner, and
+  unrelated ready work is admitted past it. Active jobs finish or reach a safe checkpoint;
   a newly queued review gets the next freed slot. Do not reserve an idle review
   lane or start another coordinator layer. The report's `queue` is admission order;
   `candidates` is diagnostic finish-first implementation order and never authorizes
-  dispatch. Its `admission` result blocks dispatch on missing/partial/inconsistent
-  review evidence. A lost atomic claim refreshes this queue; do not skip a failed
+  dispatch. Without a review-state file nothing is admitted. With an incomplete,
+  invalid or stale one, `admission.reason` names the fault and the queue carries
+  unclaimed implementation only: review, correction and resume wait for a clean
+  normalization, new work does not. A lost atomic claim refreshes this queue; do not skip a failed
   high-class action and fill its slot with lower-class work from an old snapshot.
 - **Mutate only what you own.** Step 0 PR reconciliation, decision sweeps,
   shaping, review-bead creation, and closure act only on beads whose
@@ -186,11 +192,18 @@ below stops one coordinator from duplicating or undoing another's work.
   claim left by a coordinator from before this section (an assignee without
   the prefix) qualifies only when the bead's heartbeat block names that same
   assignee as `owner=`: only coordinators write that block. An
-  `in_progress` bead also needs a bead heartbeat past the stall threshold;
+  `in_progress` bead also needs its liveness evidence past the stall
+  threshold: every bead heartbeat, plus the owner's registration expiry, or
+  the bead's last update when the owner never registered. A missing heartbeat
+  is not a veto (a session can die before writing one); a malformed one is.
   `open` and `blocked` beads qualify on the registration test alone.
-  `rank_ready_work.py` lists the candidates: `unowned_claims`
-  (`in_progress`, still spending a lane), `stranded` (ready but assigned),
-  and `orphaned_blocked` (`blocked`, with `kind` `pr` or `gate`). It treats
+  `rank_ready_work.py` applies the test and lists the candidates:
+  `recoverable_claims` (`in_progress`, past the threshold, adopt now),
+  `unowned_claims` (every dead `in_progress` claim, including those still
+  inside the threshold), `stranded` (ready but assigned), and
+  `orphaned_blocked` (`blocked`, with `kind` `pr` or `gate`). Adopt what it
+  lists rather than re-deriving the evidence, and do not report a listed claim
+  as needing manual triage. It treats
   every `coordinator:` id format alike, including pre-registry
   `coordinator:<uuid>` ids, which never register and so are never live.
   The `--if-assignee` / `--if-status` guards make
@@ -229,14 +242,46 @@ Codex thread) when available. A bounded fallback checks only pending events and
 liveness, not a full fleet audit. Choose it for expected CI/event latency within
 registry expiry limits. Never interpret a wait timeout as implementation failure.
 
-### No-progress frontier
+### Never idle with runnable work
 
-At a genuine frontier, resolve engineering decisions under decision-autonomy,
-name technical waits and owner gates, and wait for their event. If polling is
-needed, use 60 minutes and stop after 3 consecutive no-op wakes. Renew registry
-before waiting; apply the existing guarded adoption rules, not cache timing.
-On stop, publish current packet/claims/recovery state and deregister. Do not keep
-an outcome indefinitely exclusive without a runnable next step or agreed handoff.
+A blocked bead is parked, not waited on. Park it (`blocked`, with its resume
+event recorded) and take the next admitted action; a lane is never held for
+work that cannot move. An empty `queue` while `candidate_total` is nonzero or
+`recoverable_claims`, `stranded` or `orphaned_blocked` is nonempty is a fault
+to repair this wake, not a frontier. Work this ladder in order and re-rank
+after each step that changed state:
+
+1. **Refresh the evidence.** Re-run Step 0 normalization and the ranker. A
+   degraded `admission.reason` still admits unclaimed implementation: take it,
+   and report the normalizer error once instead of waiting on it.
+2. **Park your own waits.** Any claim you hold `in_progress` that is waiting on
+   review, CI, a merge queue, a dependency or an owner goes to `blocked` with
+   its resume event. An `in_progress` claim nobody is executing is a lost lane.
+3. **Adopt the dead.** Take every `recoverable_claims`, `stranded` and
+   `orphaned_blocked` entry through the guarded commands above. Preserve its
+   published and local work, then resume it, park it, or return it to the queue.
+4. **Repair waiting items that are now yours.** For each `admission.waiting`
+   entry you own or just adopted: create the missing review record
+   (`review-wiring-required`), reconcile a merged or closed PR
+   (`reconcile-terminal-pr`), or fix the named inconsistency. An entry owned by
+   a live peer is that peer's; leave it and keep going.
+5. **Take review work.** An admitted review of content you did not author is
+   work; do it, or dispatch a native independent reviewer for it.
+6. **Shape or decide.** Resolve engineering decisions under decision-autonomy
+   and shape `needs-shaping` beads that hold ready work back.
+
+A genuine frontier is what is left when the ladder changes nothing: the queue
+is empty and every remaining item is an owner hard gate, a live peer's claim,
+or an external event with a named resume. Then wait on those events; if
+polling is needed, use 60 minutes and stop after 3 consecutive no-op wakes. A
+wake that found the queue empty with the ladder unfinished is not a no-op wake.
+Renew registry before waiting. On stop, park every claim you still hold
+`in_progress`, publish current packet/claims/recovery state and deregister:
+never deregister over an `in_progress` claim, which would strand a lane until
+a peer adopts it. The stop report names each waiting item with its reason,
+owner and resume event, and states the ladder step that came back empty. Do not
+keep an outcome indefinitely exclusive without a runnable next step or agreed
+handoff.
 
 ## Model Selection Strategy
 
