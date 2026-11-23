@@ -214,6 +214,12 @@ When a direct `bd update <id> --status <to>` is rejected:
   dep is still open, `bd close <id> --force --reason "..."` is correct.
   Observed 2026-06-13 (hud-bq0gl.2: PR #765 merged out-of-order ahead of its
   dep hud-bq0gl.1).
+- **Closing an owner-assigned gate**: `bd close <id>` fails with
+  `cannot close <id>: assignee is "<owner>", actor is "<git name>"; reclaim or
+  use --force to override`. This guard is what keeps agents off owner-held
+  gates. Use `--force` only after the owner has released the gate in their own
+  words, and put that decision record in `--reason`. Never force it on an
+  agent's own judgment. Observed 2026-11-22 (butlers bu-5gywb6), bd 1.0.4.
 
 ## Other quirks
 
@@ -2492,3 +2498,10 @@ Step 0 and use the unmodified stock queue plus atomic claims.
   reclaim, or treat successful metadata reconciliation as live queue admission.
   The [delivery model](delivery-model.md#cleanup-evidence-and-existing-active-journals)
   owns the protocol and its remaining delivery/installation boundaries.
+
+## `bd` reads 0 issues in a checkout whose `.beads/metadata.json` is gitignored and missing
+- **Symptom**: `bd ready` / `bd list` print nothing (or 0 issues) in a fresh or cleaned checkout although the tracker is full; no error.
+- **Cause**: `.beads/metadata.json` (server mode, database name) is gitignored locally and absent, so bd opens an empty embedded store.
+- **Fix**: restore it from history (`git log --all --format=%h -- .beads/metadata.json`, then `git show <commit>^:.beads/metadata.json > .beads/metadata.json`), or rewrite it with the server host and database. Run `bd` from the main checkout: a `bd worktree` checkout may resolve ids poorly ("no issue found matching").
+- **Also**: `bd worktree create` chmods `.beads` to 0700 and edits `.gitignore`; on a shared-ACL project restore the mode (`chmod 2770 .beads`) and `git checkout .gitignore`.
+- Observed: 2026-11-21, syzygy.
