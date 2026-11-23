@@ -34,9 +34,11 @@ fails:
   reuse one unambiguous canonical review/PR association after checking the
   original's current PR reference. Association is checked before branch
   inference: descriptive-hyphen branches with neither a known PR binding nor
-  a related known anchor infer no issue. Known conflicting bindings, ordinary
-  canonical lookup failures and other malformed in-prefix identities remain
-  failures
+  a related known anchor infer no issue. A dotted child with an `-sN` slice
+  suffix can be a supporting PR when its same-repository base chain reaches
+  one current canonical review head and no slice has a separate binding.
+  Known conflicting bindings, ordinary canonical lookup failures and other
+  malformed in-prefix identities remain failures
 - relations: `review_relation_graph.review_relation_error` rejects malformed
   entries, self-links, duplicate review-ID left sides, a review ID reused in the
   original role, and reciprocal/longer cycles (`cyclic-review-relation`);
@@ -51,6 +53,7 @@ import json
 import re
 import subprocess
 import sys
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -66,6 +69,8 @@ from delivery_package import metadata as bead_metadata, validate_delivery
 SCHEMA = "beads-pr-review-normalization/v1"
 COOLDOWN = timedelta(minutes=5)
 BEAD_ID_RE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)+(?:\.[0-9]+)*\Z")
+PR_HEAD_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+STACK_SLICE_RE = re.compile(r"(agent/.+\.[0-9]+)-s[1-9][0-9]*[a-z]?\Z")
 ISSUE_PREFIX_RE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
 SAFE_CODE_RE = re.compile(r"[a-z0-9][a-z0-9-]*\Z")
 PR_STATES = frozenset({"OPEN", "CLOSED", "MERGED"})
@@ -324,7 +329,7 @@ def view_pr(
             cache[pr_number] = (None, "invalid-pr-number")
         elif payload["state"] not in PR_STATES:
             cache[pr_number] = (None, "invalid-pr-state")
-        elif not isinstance(payload.get("headRefOid"), str) or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", payload["headRefOid"]):
+        elif not isinstance(payload.get("headRefOid"), str) or not PR_HEAD_RE.fullmatch(payload["headRefOid"]):
             cache[pr_number] = (None, "invalid-pr-head")
         else:
             created_at = parse_time(payload.get("createdAt"))
@@ -493,12 +498,72 @@ def author_activity_evidence(
             "head_sha": before["headRefOid"]}, None
 
 
+def verified_supporting_prs(
+    prs: list[object],
+    canonical_by_key: dict[tuple[str, int], str],
+    original_contexts: dict[str, tuple[dict[str, Any] | None, int | None, str | None]],
+    pr_cache: dict[int, tuple[dict[str, Any] | None, str | None]],
+) -> set[int]:
+    """Find unbound slice PRs whose exact base links reach a canonical open head."""
+    rows = [pr for pr in prs if isinstance(pr, dict)]
+    number_count = Counter(pr["number"] for pr in rows if valid_pr_number(pr.get("number")))
+    head_count = Counter(pr["headRefName"] for pr in rows if isinstance(pr.get("headRefName"), str))
+    by_head = {
+        pr["headRefName"]: pr for pr in rows
+        if valid_pr_number(pr.get("number")) and number_count[pr["number"]] == 1
+        and isinstance(pr.get("headRefName"), str) and head_count[pr["headRefName"]] == 1
+        and isinstance(pr.get("headRefOid"), str) and PR_HEAD_RE.fullmatch(pr["headRefOid"])
+        and pr.get("isCrossRepository") is False and parse_time(pr.get("createdAt"))
+    }
+    bindings = set(canonical_by_key) | {
+        (original, pr) for original, (_, pr, error) in original_contexts.items()
+        if error is None and pr is not None
+    }
+    bound_numbers = {number for _, number in bindings}
+    roots = {}
+    for original, number in canonical_by_key:
+        branch = f"agent/{original}"
+        row = by_head.get(branch)
+        live, error = pr_cache.get(number, (None, None))
+        if (
+            row and row["number"] == number and error is None and live
+            and live["state"] == "OPEN" and live["headRefOid"] == row["headRefOid"]
+            and sum(bead == original for bead, _ in bindings) == 1
+            and sum(pr == number for _, pr in bindings) == 1
+        ):
+            roots[branch] = row
+
+    slices = {}
+    for branch, row in by_head.items():
+        match = STACK_SLICE_RE.fullmatch(branch)
+        if match and match[1] in roots and row["number"] not in bound_numbers:
+            slices[branch] = (match[1], row)
+
+    verified: set[int] = set()
+    for branch, (root, row) in slices.items():
+        visited = {branch}
+        current = row
+        while isinstance(base := current.get("baseRefName"), str) and base not in visited:
+            parent = by_head.get(base)
+            if parent is None or current.get("baseRefOid") != parent["headRefOid"]:
+                break
+            if base == root:
+                verified.add(row["number"])
+                break
+            if base not in slices or slices[base][0] != root:
+                break
+            visited.add(base)
+            current = parent
+    return verified
+
+
 def self_heal_candidates(
     *,
     repo_root: Path,
     now: datetime,
     canonical_by_key: dict[tuple[str, int], str],
     original_contexts: dict[str, tuple[dict[str, Any] | None, int | None, str | None]],
+    pr_cache: dict[int, tuple[dict[str, Any] | None, str | None]],
     task_lookup_complete: bool,
     errors: list[dict[str, str]],
 ) -> tuple[list[dict[str, Any]], bool]:
@@ -523,7 +588,8 @@ def self_heal_candidates(
     slug, error = repo_slug(repo_root)
     if not error:
         payload, error = command_json(
-            ["gh", "pr", "list", "--repo", slug, "--state", "open", "--json", "number,headRefName,createdAt"],
+            ["gh", "pr", "list", "--repo", slug, "--state", "open", "--json",
+             "number,headRefName,createdAt,headRefOid,baseRefName,baseRefOid,isCrossRepository"],
             repo_root,
         )
     if error:
@@ -535,6 +601,10 @@ def self_heal_candidates(
 
     candidates: list[dict[str, Any]] = []
     discovery_complete = True
+    supporting_prs = (
+        verified_supporting_prs(payload, canonical_by_key, original_contexts, pr_cache)
+        if task_lookup_complete else set()
+    )
     for item in payload:
         if not isinstance(item, dict):
             report_error(errors, "invalid-record", "open-prs")
@@ -564,6 +634,8 @@ def self_heal_candidates(
                 original_id == anchor or original_id.startswith(f"{anchor}-")
                 for anchor in known_originals
             )
+            if valid_pr_number(number) and number in supporting_prs:
+                continue
             if not known_pr and not related_anchor and "-" in original_id[len(prefix) + 1:]:
                 continue
         if not BEAD_ID_RE.fullmatch(original_id):
@@ -1143,6 +1215,7 @@ def normalize(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         now=now,
         canonical_by_key=canonical_by_key,
         original_contexts=original_contexts,
+        pr_cache=pr_cache,
         task_lookup_complete=pre_discovery_collection_complete,
         errors=errors,
     )

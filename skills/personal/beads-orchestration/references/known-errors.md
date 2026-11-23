@@ -2431,6 +2431,14 @@ beads (`bu-atsax`, `bu-m09qm`) whose prior coordinator session's heartbeat was
   failures. Custom hyphenated IDs remain valid when explicit evidence names
   them. Software fixtures do not establish live global scan success; canonical
   publication, reviewed installation and a fresh real scan remain separate.
+- **Stacked slices**: for a dotted original, a branch such as
+  `agent/bu-abc.1-s3b` can be a supporting slice of a canonical open PR on
+  `agent/bu-abc.1`. Discovery checks same-repository PR records and matches
+  each exact base ref and commit to the next open head, ending at the current
+  canonical review head. Every slice must lack a separate binding. This leaves
+  the canonical PR and review in the inventory. Retargeting a slice to the
+  delivery base, a conflicting binding, or an unverifiable stack requires
+  normal reconciliation.
 - Observed: 2026-11-07, `aib-r07`; scanner grammar/association issue, not a new
   `bd` CLI version defect.
 

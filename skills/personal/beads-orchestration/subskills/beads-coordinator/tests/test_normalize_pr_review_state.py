@@ -425,7 +425,8 @@ class NormalizePrReviewStateTests(unittest.TestCase):
             },
             "gh": {
                 ("repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"),
-                ("pr", "list", "--repo", "owner/repo", "--state", "open", "--json", "number,headRefName,createdAt"),
+                ("pr", "list", "--repo", "owner/repo", "--state", "open", "--json",
+                 "number,headRefName,createdAt,headRefOid,baseRefName,baseRefOid,isCrossRepository"),
                 ("pr", "view", "41", "--repo", "owner/repo", "--json", "number,state,mergedAt,createdAt,headRefOid"),
                 ("pr", "view", "42", "--repo", "owner/repo", "--json", "number,state,mergedAt,createdAt,headRefOid,headRefName"),
             },
@@ -1920,6 +1921,79 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                     self.assertTrue(payload["findings"])
                     self.assertTrue(all(item["recommendation"] == "manual-triage"
                                         for item in payload["findings"] + payload["self_heal_candidates"]))
+
+    def test_supporting_slices_require_a_current_unambiguous_same_repo_stack(self) -> None:
+        original_id, review_id = "bu-abc.1", "bu-review"
+        branch = f"agent/{original_id}"
+        first_slice = f"{branch}-s2"
+        second_slice = f"{branch}-s3b"
+        cases = (
+            "verified", "retargeted", "cross-repo", "stale-parent-head", "stale-root-head",
+            "missing-parent", "duplicate-head", "duplicate-number", "cycle",
+            "malformed-metadata", "separately-bound", "no-review",
+        )
+        for case in cases:
+            with self.subTest(case=case):
+                anchor = original_bead(original_id, 41)
+                root_pr = {**pr_payload("OPEN"), "headRefName": branch, "isCrossRepository": False}
+                first = {**root_pr, "number": 42, "headRefName": first_slice, "headRefOid": "b" * 40,
+                         "baseRefName": branch, "baseRefOid": "a" * 40}
+                second = {**root_pr, "number": 43, "headRefName": second_slice, "headRefOid": "c" * 40,
+                          "baseRefName": first_slice, "baseRefOid": "b" * 40}
+                disjoint = {**root_pr, "number": 44, "headRefName": "agent/bu-disjoint"}
+                rows = [second, disjoint, first, root_pr]
+                fixture = {
+                    "prefix_payload": {"key": "issue_prefix", "value": "bu"},
+                    "blocked_pr_review": [anchor, review_task(review_id, original_id)],
+                    "resolver_payloads": {
+                        review_id: {"ok": True, "original_id": original_id, "pr_number": 41},
+                    },
+                    "shows": {original_id: [anchor], "bu-disjoint": [{"id": "bu-disjoint", "status": "open"}]},
+                    "prs": {"41": dict(root_pr)},
+                    "open_prs": rows,
+                }
+                if case == "retargeted":
+                    first["baseRefName"] = "main"
+                elif case == "cross-repo":
+                    first["isCrossRepository"] = True
+                elif case == "stale-parent-head":
+                    second["baseRefOid"] = "d" * 40
+                elif case == "stale-root-head":
+                    fixture["prs"]["41"]["headRefOid"] = "d" * 40
+                elif case == "missing-parent":
+                    rows.remove(first)
+                elif case == "duplicate-head":
+                    rows.append({**first, "number": 45})
+                elif case == "duplicate-number":
+                    rows.append({**first, "headRefName": "docs/elsewhere"})
+                elif case == "cycle":
+                    first.update(baseRefName=second_slice, baseRefOid="c" * 40)
+                elif case == "malformed-metadata":
+                    second.pop("isCrossRepository")
+                elif case == "separately-bound":
+                    original = original_bead("bu-elsewhere", 42)
+                    fixture["blocked_pr_review"].append(original)
+                    fixture["shows"]["bu-elsewhere"] = [original]
+                    fixture["prs"]["42"] = first
+                elif case == "no-review":
+                    fixture["blocked_pr_review"] = [anchor]
+
+                result, _, _ = self.run_fixture(fixture)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                payload = json.loads(result.stdout)
+                candidates = payload["self_heal_candidates"]
+                self.assertEqual([item["pr_number"] for item in candidates], [41, 44])
+                if case == "verified":
+                    self.assertEqual(payload["status"], "success", payload["errors"])
+                    self.assertEqual(payload["errors"], [])
+                    self.assertEqual(candidates[0]["canonical_review_id"], review_id)
+                    self.assertEqual(candidates[0]["recommendation"], "review-wiring-current")
+                    self.assertEqual(candidates[1]["recommendation"], "self-heal-original-and-review-wiring")
+                else:
+                    self.assertEqual(payload["status"], "partial")
+                    self.assertIn({"code": "invalid-record", "scope": "open-prs"}, payload["errors"])
+                    self.assertTrue(all(item["recommendation"] == "manual-triage"
+                                        for item in payload["findings"] + candidates))
 
     def test_invalid_project_prefix_or_in_prefix_discovery_manualizes_collection(self) -> None:
         original_id = "bu-abc"
