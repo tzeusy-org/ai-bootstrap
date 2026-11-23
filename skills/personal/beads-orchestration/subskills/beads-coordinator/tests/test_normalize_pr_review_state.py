@@ -1923,17 +1923,19 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                                         for item in payload["findings"] + payload["self_heal_candidates"]))
 
     def test_supporting_slices_require_a_current_unambiguous_same_repo_stack(self) -> None:
-        original_id, review_id = "bu-abc.1", "bu-review"
-        branch = f"agent/{original_id}"
-        first_slice = f"{branch}-s2"
-        second_slice = f"{branch}-s3b"
+        review_id = "bu-review"
         cases = (
             "verified", "retargeted", "cross-repo", "stale-parent-head", "stale-root-head",
             "missing-parent", "duplicate-head", "duplicate-number", "cycle",
             "malformed-metadata", "separately-bound", "no-review",
+            "closed-root", "merged-root", "other-canonical-root", "non-dotted-anchor",
         )
         for case in cases:
             with self.subTest(case=case):
+                original_id = "bu-abc" if case == "non-dotted-anchor" else "bu-abc.1"
+                branch = f"agent/{original_id}"
+                first_slice = f"{branch}-s2"
+                second_slice = f"{branch}-s3b"
                 anchor = original_bead(original_id, 41)
                 root_pr = {**pr_payload("OPEN"), "headRefName": branch, "isCrossRepository": False}
                 first = {**root_pr, "number": 42, "headRefName": first_slice, "headRefOid": "b" * 40,
@@ -1977,12 +1979,34 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                     fixture["prs"]["42"] = first
                 elif case == "no-review":
                     fixture["blocked_pr_review"] = [anchor]
+                elif case in {"closed-root", "merged-root"}:
+                    fixture["prs"]["41"].update(
+                        state=case.removesuffix("-root").upper(),
+                        mergedAt="2026-08-14T03:30:00Z" if case == "merged-root" else None,
+                    )
+                elif case == "other-canonical-root":
+                    other_id, other_review_id = "bu-other.2", "bu-other-review"
+                    other = original_bead(other_id, 45)
+                    other_pr = {**root_pr, "number": 45, "headRefName": f"agent/{other_id}",
+                                "headRefOid": "d" * 40}
+                    fixture["blocked_pr_review"].extend([other, review_task(other_review_id, other_id)])
+                    fixture["shows"][other_id] = [other]
+                    fixture["resolver_payloads"][other_review_id] = {
+                        "ok": True, "original_id": other_id, "pr_number": 45,
+                    }
+                    fixture["prs"]["45"] = other_pr
+                    rows.append(other_pr)
+                    second.update(baseRefName=other_pr["headRefName"], baseRefOid=other_pr["headRefOid"])
 
                 result, _, _ = self.run_fixture(fixture)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 payload = json.loads(result.stdout)
                 candidates = payload["self_heal_candidates"]
-                self.assertEqual([item["pr_number"] for item in candidates], [41, 44])
+                expected_numbers = {
+                    "non-dotted-anchor": [41, 42, 43, 44],
+                    "other-canonical-root": [41, 44, 45],
+                }.get(case, [41, 44])
+                self.assertEqual([item["pr_number"] for item in candidates], expected_numbers)
                 if case == "verified":
                     self.assertEqual(payload["status"], "success", payload["errors"])
                     self.assertEqual(payload["errors"], [])
@@ -1991,7 +2015,10 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                     self.assertEqual(candidates[1]["recommendation"], "self-heal-original-and-review-wiring")
                 else:
                     self.assertEqual(payload["status"], "partial")
-                    self.assertIn({"code": "invalid-record", "scope": "open-prs"}, payload["errors"])
+                    if case == "non-dotted-anchor":
+                        self.assertTrue(any(error["scope"] == "self-heal" for error in payload["errors"]))
+                    else:
+                        self.assertIn({"code": "invalid-record", "scope": "open-prs"}, payload["errors"])
                     self.assertTrue(all(item["recommendation"] == "manual-triage"
                                         for item in payload["findings"] + candidates))
 
