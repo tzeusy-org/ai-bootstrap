@@ -195,6 +195,8 @@ def collect(repo_root: Path, *, with_dependencies: bool = False) -> tuple[dict[s
     still evaluates source/member blockers, so collect those rows regardless
     of claim presence. Validated packages extend that scope to their members;
     held/live/unknown targets remain subject to the unchanged hard gate.
+    Missing direct prerequisites use bounded exact-ID lists for closed rows;
+    omissions and nonclosed rows retain the original exact single-ID read.
     """
     queries = {
         "live": ["list", "--status=open,blocked,in_progress", "--json", "--limit", "0"],
@@ -262,13 +264,37 @@ def collect(repo_root: Path, *, with_dependencies: bool = False) -> tuple[dict[s
             for target in blockers_of(row) if target not in known
         }
         snapshot["dependency_records"] = []
-        for target in sorted(needed):
-            if not DELIVERY_ID.fullmatch(target):
-                return None, {"code": "invalid-dependency", "scope": "admission"}
-            records, error = bd_json(["show", target, "--json"], repo_root)
-            if error or not isinstance(records, list) or len(records) != 1 or not isinstance(records[0], dict) or records[0].get("id") != target:
+        targets = sorted(needed)
+        if any(not DELIVERY_ID.fullmatch(target) for target in targets):
+            return None, {"code": "invalid-dependency", "scope": "admission"}
+        # Bound command arguments and per-call results, never scan the archive.
+        batch_size = 40
+        for start in range(0, len(targets), batch_size):
+            batch = targets[start : start + batch_size]
+            records, error = bd_json([
+                "list", "--id", ",".join(batch), "--all", "--include-gates",
+                "--include-ephemeral", "--include-infra", "--include-templates", "--limit", "0", "--json",
+            ], repo_root)
+            if error or not isinstance(records, list):
                 return None, {"code": error or "invalid-dependency", "scope": "admission"}
-            snapshot["dependency_records"].extend(records)
+            if any(not isinstance(row, dict) or not isinstance(row.get("id"), str)
+                   or not text(row.get("status")) for row in records):
+                return None, {"code": "invalid-dependency", "scope": "admission"}
+            by_id = {row["id"]: row for row in records}
+            if len(by_id) != len(records) or not set(by_id).issubset(batch):
+                return None, {"code": "invalid-dependency", "scope": "admission"}
+            for target in batch:
+                row = by_id.get(target)
+                if row is None or row["status"] != "closed":
+                    # A successful list may omit rows; live statuses may change.
+                    # Neither can stand in for the original exact-row evidence.
+                    shown, error = bd_json(["show", target, "--json"], repo_root)
+                    if (error or not isinstance(shown, list) or len(shown) != 1
+                            or not isinstance(shown[0], dict) or shown[0].get("id") != target
+                            or not text(shown[0].get("status"))):
+                        return None, {"code": error or "invalid-dependency", "scope": "admission"}
+                    row = shown[0]
+                snapshot["dependency_records"].append(row)
     return snapshot, None
 
 

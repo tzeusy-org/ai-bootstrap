@@ -105,7 +105,8 @@ class SnapshotDriftTests(unittest.TestCase):
         self.assertEqual(result, ranking.rank(snapshot([stable, reopened]), now=NOW, review_state=normalized()))
 
     def test_unresolved_collection_drift_fails_closed_with_specific_reason(self):
-        stable = bead("bd-stable")
+        stable = bead("bd-stable", assignee="coordinator:a", blocks_on=["bd-old-gate"])
+        stable["metadata"] = {"delivery_anchor": "bd-old-anchor"}
         reopened = bead("bd-reopened")
         with patch.object(ranking, "bd_json", side_effect=[
             ([stable], None), ([stable, reopened], None), ([], None), ({}, None),
@@ -599,7 +600,8 @@ class AdmissionPriorityTests(unittest.TestCase):
 
     def test_collector_supplies_review_prerequisites_without_weakening_gates(self):
         cases = (
-            "closed", "shared-target", "shown-open", "shown-blocked", "unknown", "failed", "malformed",
+            "closed", "omitted", "listed-open-shown-closed", "listed-open-shown-blocked",
+            "shared-target", "shown-open", "shown-blocked", "unknown", "failed", "malformed",
             "multiple", "wrong-id", "invalid-target", "without-dependencies",
             "member", "known-closed-member", "member-live-blocker", "member-held",
             "member-owner-mismatch", "source-held", "inactive-source-owner",
@@ -675,6 +677,7 @@ class AdmissionPriorityTests(unittest.TestCase):
                 source = snapshot(rows, kv=live_registry(*actors), ready=[])
                 original = json.dumps((source, shows, state), sort_keys=True)
                 reads = []
+                batch_reads = []
 
                 def read(argv, repo_root):
                     queries = {
@@ -685,12 +688,22 @@ class AdmissionPriorityTests(unittest.TestCase):
                     }
                     if tuple(argv) in queries:
                         return queries[tuple(argv)], None
+                    if argv[:2] == ["list", "--id"]:
+                        self.assertEqual(argv[2].split(","), [gate["id"]])
+                        batch_reads.append(gate["id"])
+                        if case in {"omitted", "failed"}:
+                            return [], None
+                        if case.startswith("listed-open-"):
+                            return [{**gate, "status": "open"}], None
+                        return shows[gate["id"]], None
                     self.assertEqual(argv[0], "show")
                     self.assertEqual(argv[2:], ["--json"])
                     reads.append(argv[1])
                     if case == "failed" and argv[1] == gate["id"]:
                         return None, "command-failed"
                     self.assertIn(argv[1], shows, "collector must read only missing direct identities")
+                    if case == "listed-open-shown-blocked":
+                        return [{**gate, "status": "blocked"}], None
                     return shows[argv[1]], None
 
                 with patch.object(ranking, "bd_json", side_effect=read):
@@ -708,7 +721,8 @@ class AdmissionPriorityTests(unittest.TestCase):
                 else:
                     self.assertIsNone(error)
                     payload = ranking.rank(collected, now=NOW, coordinator="coordinator:a", lanes=4, review_state=state)
-                    allowed = case in {"closed", "shared-target", "member", "known-closed-member", "peer-source-owner"}
+                    allowed = case in {"closed", "omitted", "listed-open-shown-closed", "shared-target",
+                                       "member", "known-closed-member", "peer-source-owner"}
                     self.assertEqual([action["id"] for action in payload["queue"]], [review["id"]] if allowed else [])
                     if allowed:
                         self.assertEqual(payload["queue"][0]["owner"], owner)
@@ -716,8 +730,12 @@ class AdmissionPriorityTests(unittest.TestCase):
                         self.assertIn({"id": review["id"], "reason": "reconcile-terminal-pr"}, payload["admission"]["waiting"])
                     if case in {"without-dependencies", "known-closed-member", "terminal-owner-gate"}:
                         self.assertNotIn(gate["id"], reads)
+                        self.assertEqual(batch_reads, [])
                     else:
-                        self.assertEqual(reads.count(gate["id"]), 1)
+                        self.assertEqual(batch_reads, [gate["id"]])
+                        fallback = case in {"omitted", "shown-open", "shown-blocked", "member-live-blocker",
+                                            "listed-open-shown-closed", "listed-open-shown-blocked"}
+                        self.assertEqual(reads.count(gate["id"]), int(fallback))
                 self.assertEqual(len(reads), len(set(reads)), "duplicate dependency reads")
                 self.assertEqual(json.dumps((source, shows, state), sort_keys=True), original)
 
@@ -1510,9 +1528,22 @@ class CommandLineTests(unittest.TestCase):
                     with open(os.environ["RANK_CALLS"], "a", encoding="utf-8") as calls:
                         calls.write(json.dumps(argv) + "\\n")
                     key = argv[0]
+                    if key == "list" and "--id" in argv:
+                        key = "dependency-list"
                     if key in fixture.get("fail", []):
                         raise SystemExit(1)
-                    print(json.dumps(fixture[key][argv[1]] if key == "show" else fixture[key]))
+                    if key == "dependency-list":
+                        if fixture.get("invalid_dependency_json"):
+                            print("{invalid json")
+                            raise SystemExit(0)
+                        requested = argv[argv.index("--id") + 1].split(",")
+                        rows = fixture.get("dependency-list", [row for issue_id in reversed(requested)
+                                    for row in fixture.get("show", {}).get(issue_id, [])])
+                    elif key == "show":
+                        rows = fixture.get("show", {}).get(argv[1], [])
+                    else:
+                        rows = fixture[key]
+                    print(json.dumps(rows))
                     """
                 ),
                 encoding="utf-8",
@@ -1583,8 +1614,30 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertEqual([action["kind"] for action in payload["queue"]], ["review"])
-        self.assertEqual(calls[-2:], [["show", gate["id"], "--json"], ["show", review_gate["id"], "--json"]])
-        self.assertEqual(len(calls), 6)
+        self.assertEqual(calls[-1], [
+            "list", "--id", f'{gate["id"]},{review_gate["id"]}', "--all", "--include-gates",
+            "--include-ephemeral", "--include-infra", "--include-templates", "--limit", "0", "--json",
+        ])
+        self.assertEqual(len(calls), 5)
+
+        # Cross two batch boundaries and compare the whole decision with the
+        # same frozen records supplied by the former individual-read collector.
+        gates = [gate, review_gate, *[bead(f"bd-old-{i:03}", status="closed") for i in range(79)]]
+        anchor["dependencies"] = [
+            {"issue_id": anchor["id"], "depends_on_id": row["id"], "type": "blocks"} for row in gates
+        ]
+        fixture["show"] = {row["id"]: [row] for row in gates}
+        result, calls = self.run_cli(fixture, review_state=normalized((anchor, review)))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        serial = snapshot(rows, kv=fixture["kv"], ready=[])
+        serial["dependency_records"] = sorted(gates, key=lambda row: row["id"])
+        self.assertEqual(payload, ranking.rank(serial, now=NOW, coordinator="coordinator:a",
+                                               review_state=normalized((anchor, review))))
+        batches = [call[2].split(",") for call in calls if call[:2] == ["list", "--id"]]
+        self.assertEqual([len(batch) for batch in batches], [40, 40, 1])
+        self.assertEqual([item for batch in batches for item in batch], sorted(fixture["show"]))
+        self.assertEqual(len(calls), 7)  # Previously four inventory reads plus 81 shows.
 
     def test_cli_fails_closed_on_queries_and_snapshot_drift(self) -> None:
         inventory = self.fixture()
@@ -1597,12 +1650,16 @@ class CommandLineTests(unittest.TestCase):
         child["assignee"] = "coordinator:a"
         child["dependencies"] = [{"issue_id": child["id"], "depends_on_id": "bd-old-gate", "type": "blocks"}]
         dependency["fail"] = ["show"]
+        dependency["dependency-list"] = []
         drift = self.fixture()
+        drift["list"][1]["assignee"] = "coordinator:a"
+        drift["list"][1]["dependencies"] = child["dependencies"]
+        drift["list"][1]["metadata"] = {"delivery_anchor": "bd-closed-anchor"}
         drift["ready"].append(bead("bd-ready-only"))
         for fixture, code, scope, count in (
             (inventory, "command-failed", "epics", 3),
             (package, "command-failed", "packages", 5),
-            (dependency, "command-failed", "admission", 5),
+            (dependency, "command-failed", "admission", 6),
             (drift, "ready-live-drift", "snapshot", 8),
         ):
             with self.subTest(scope=scope):
@@ -1611,6 +1668,38 @@ class CommandLineTests(unittest.TestCase):
                 payload = json.loads(result.stdout)
                 self.assertEqual(payload["status"], "fatal")
                 self.assertEqual(payload["errors"], [{"code": code, "scope": scope}])
+                self.assertEqual(payload["queue"], [])
+                self.assertEqual(payload["candidates"], [])
+                self.assertEqual(len(calls), count)
+
+        # Process success alone proves neither exact identity nor completeness.
+        gate = bead("bd-old-gate", status="closed")
+        for batch, shown, failure, code, count in (
+            (None, [gate], None, "invalid-dependency", 5),
+            ({}, [gate], None, "invalid-dependency", 5),
+            ([None], [gate], None, "invalid-dependency", 5),
+            ([{"id": None}], [gate], None, "invalid-dependency", 5),
+            ([{"id": gate["id"]}], [gate], None, "invalid-dependency", 5),
+            ([{**gate, "status": []}], [gate], None, "invalid-dependency", 5),
+            ([gate, gate], [gate], None, "invalid-dependency", 5),
+            ([bead("bd-foreign", status="closed")], [gate], None, "invalid-dependency", 5),
+            ([], [], None, "invalid-dependency", 6),
+            ([], {}, None, "invalid-dependency", 6),
+            ([], [None], None, "invalid-dependency", 6),
+            ([], [{"id": None}], None, "invalid-dependency", 6),
+            ([], [{"id": gate["id"]}], None, "invalid-dependency", 6),
+            ([], [gate, gate], None, "invalid-dependency", 6),
+            ([], [bead("bd-foreign", status="closed")], None, "invalid-dependency", 6),
+            ([], [gate], "dependency-list", "command-failed", 5),
+            ([], [gate], "invalid-json", "invalid-json", 5),
+        ):
+            with self.subTest(batch=batch, shown=shown, failure=failure):
+                fixture = {**dependency, "dependency-list": batch, "show": {gate["id"]: shown},
+                           "fail": [failure], "invalid_dependency_json": failure == "invalid-json"}
+                result, calls = self.run_cli(fixture, review_state=normalized())
+                self.assertEqual(result.returncode, 1, result.stderr)
+                payload = json.loads(result.stdout)
+                self.assertEqual(payload["errors"], [{"code": code, "scope": "admission"}])
                 self.assertEqual(payload["queue"], [])
                 self.assertEqual(payload["candidates"], [])
                 self.assertEqual(len(calls), count)
