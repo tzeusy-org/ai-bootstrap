@@ -2492,3 +2492,22 @@ Step 0 and use the unmodified stock queue plus atomic claims.
   reclaim, or treat successful metadata reconciliation as live queue admission.
   The [delivery model](delivery-model.md#cleanup-evidence-and-existing-active-journals)
   owns the protocol and its remaining delivery/installation boundaries.
+
+
+## Admission ranker: ready/live snapshot drift
+
+- **Symptom**: `rank_ready_work.py` raises `KeyError` at the row lookup in
+  `admission_queue` when a ready ID is absent from the separately read live
+  inventory. The CLI can instead report `unexpected-error` with scope `rank`.
+  A Butlers scan collected 844 live and 376 ready rows before failing at this
+  lookup; a synthetic ready-only row reproduces the failure path.
+- **Cause**: separate `bd list` and `bd ready` calls can straddle tracker
+  changes. A ready-only identity violates admission's live-row assumption;
+  fetching package or dependency rows does not reconcile the inventories.
+- **Fix**: use the shared snapshot validator before hydration and at the
+  direct rank entry point. Collection retries the same four inventory queries
+  once for `ready-live-drift` only; persistent disagreement emits a fatal
+  `ready-live-drift` receipt (scope `snapshot`) with empty queue and candidates.
+  Preserve other validation/lookup errors and refresh on the next normal wake;
+  never fabricate a missing live row or dispatch from a partial inventory.
+- **Observed**: 2026-11-24, bd 1.3.1; source fix tracked by aib-8bek.

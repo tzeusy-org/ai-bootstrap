@@ -81,6 +81,49 @@ def queue_ids(payload):
     return [item["id"] for item in payload["candidates"]]
 
 
+class SnapshotDriftTests(unittest.TestCase):
+    def test_collector_reloads_once_before_resolving_missing_dependencies(self):
+        stable = bead("bd-stable")
+        reopened = bead("bd-reopened")
+        discarded = bead("bd-discarded", status="blocked", assignee="coordinator:a", blocks_on=["bd-old-gate"])
+        discarded["metadata"] = {"delivery_anchor": "bd-old-anchor"}
+        with patch.object(ranking, "bd_json", side_effect=[
+            ([stable, discarded], None), ([stable, reopened], None), ([], None), ({}, None),
+            ([stable, reopened], None), ([stable, reopened], None), ([], None), ({}, None),
+        ]) as tracker:
+            current, error = ranking.collect(Path.cwd(), with_dependencies=True)
+        self.assertIsNone(error)
+        queries = [
+            ["list", "--status=open,blocked,in_progress", "--json", "--limit", "0"],
+            ["ready", "--json", "--brief", "--limit", "0", "--exclude-type", "epic"],
+            ["epic", "status", "--json"],
+            ["kv", "list", "--json"],
+        ]
+        self.assertEqual([call.args[0] for call in tracker.call_args_list], queries * 2)
+        result = ranking.rank(current, now=NOW, review_state=normalized())
+        self.assertEqual([action["id"] for action in result["queue"]], ["bd-reopened", "bd-stable"])
+        self.assertEqual(result, ranking.rank(snapshot([stable, reopened]), now=NOW, review_state=normalized()))
+
+    def test_unresolved_collection_drift_fails_closed_with_specific_reason(self):
+        stable = bead("bd-stable")
+        reopened = bead("bd-reopened")
+        with patch.object(ranking, "bd_json", side_effect=[
+            ([stable], None), ([stable, reopened], None), ([], None), ({}, None),
+        ] * 2) as tracker:
+            current, error = ranking.collect(Path.cwd(), with_dependencies=True)
+        self.assertIsNone(current)
+        self.assertEqual(tracker.call_count, 8)
+        self.assertEqual(error, {"code": "ready-live-drift", "scope": "snapshot"})
+
+        result = ranking.rank(
+            snapshot([stable], ready=[stable, reopened]), now=NOW, review_state=normalized(),
+        )
+        self.assertEqual(result["status"], "fatal")
+        self.assertEqual(result["errors"], [error])
+        self.assertEqual(result["queue"], [])
+        self.assertEqual(result["candidates"], [])
+
+
 SHA = "a" * 40
 
 def normalized(*pairs, head=SHA):
@@ -1375,19 +1418,28 @@ class FailClosedTests(unittest.TestCase):
         self.assertEqual(queue_ids(ranking.rank(snapshot([row]), now=NOW)), ["bd-1"])
 
     def test_record_without_an_id_is_fatal(self) -> None:
-        snap = snapshot([bead("bd-1")])
-        snap["ready"].append({"title": "no id"})
-
-        payload = ranking.rank(snap, now=NOW)
-
-        self.assertEqual(payload["errors"], [{"code": "invalid-record", "scope": "ready"}])
-        self.assertEqual(payload["candidates"], [])
+        for scope in ("live", "ready", "epics"):
+            with self.subTest(scope=scope):
+                snap = snapshot([bead("bd-1")], ready=[bead("bd-ready-only")])
+                snap[scope].append({"title": "no id"})
+                error = {"code": "invalid-record", "scope": scope}
+                payload = ranking.rank(snap, now=NOW)
+                self.assertEqual(payload["errors"], [error])
+                self.assertEqual(payload["queue"], [])
+                self.assertEqual(payload["candidates"], [])
+                with patch.object(ranking, "bd_json", side_effect=[(value, None) for value in snap.values()]) as tracker:
+                    self.assertEqual(ranking.collect(Path.cwd(), with_dependencies=True), (None, error))
+                self.assertEqual(tracker.call_count, 4)
 
     def test_wrong_payload_shape_is_fatal(self) -> None:
         snap = snapshot([bead("bd-1")])
         snap["kv"] = []
 
-        self.assertEqual(ranking.rank(snap, now=NOW)["errors"], [{"code": "invalid-json", "scope": "kv"}])
+        error = {"code": "invalid-json", "scope": "kv"}
+        self.assertEqual(ranking.rank(snap, now=NOW)["errors"], [error])
+        with patch.object(ranking, "bd_json", side_effect=[(value, None) for value in snap.values()]) as tracker:
+            self.assertEqual(ranking.collect(Path.cwd(), with_dependencies=True), (None, error))
+        self.assertEqual(tracker.call_count, 4)
 
 
 class RegistryTests(unittest.TestCase):
@@ -1534,16 +1586,34 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(calls[-2:], [["show", gate["id"], "--json"], ["show", review_gate["id"], "--json"]])
         self.assertEqual(len(calls), 6)
 
-    def test_cli_fails_closed_on_a_failed_query(self) -> None:
-        fixture = self.fixture()
-        fixture["fail"] = ["epic"]
-
-        result, _ = self.run_cli(fixture)
-
-        self.assertEqual(result.returncode, 1)
-        payload = json.loads(result.stdout)
-        self.assertEqual(payload["status"], "fatal")
-        self.assertEqual(payload["errors"], [{"code": "command-failed", "scope": "epics"}])
+    def test_cli_fails_closed_on_queries_and_snapshot_drift(self) -> None:
+        inventory = self.fixture()
+        inventory["fail"] = ["epic"]
+        package = self.fixture()
+        package["list"][1]["metadata"] = {"delivery_anchor": "bd-closed-anchor"}
+        package["fail"] = ["show"]
+        dependency = self.fixture()
+        child = dependency["list"][1]
+        child["assignee"] = "coordinator:a"
+        child["dependencies"] = [{"issue_id": child["id"], "depends_on_id": "bd-old-gate", "type": "blocks"}]
+        dependency["fail"] = ["show"]
+        drift = self.fixture()
+        drift["ready"].append(bead("bd-ready-only"))
+        for fixture, code, scope, count in (
+            (inventory, "command-failed", "epics", 3),
+            (package, "command-failed", "packages", 5),
+            (dependency, "command-failed", "admission", 5),
+            (drift, "ready-live-drift", "snapshot", 8),
+        ):
+            with self.subTest(scope=scope):
+                result, calls = self.run_cli(fixture, review_state=normalized())
+                self.assertEqual(result.returncode, 1, result.stderr)
+                payload = json.loads(result.stdout)
+                self.assertEqual(payload["status"], "fatal")
+                self.assertEqual(payload["errors"], [{"code": code, "scope": scope}])
+                self.assertEqual(payload["queue"], [])
+                self.assertEqual(payload["candidates"], [])
+                self.assertEqual(len(calls), count)
 
 
 if __name__ == "__main__":
