@@ -41,7 +41,7 @@ fails:
   completeness proof. Stack custody uses an unlabelled, unlimited census of
   all active Beads (including deferred and normally hidden records), not just
   review originals. Review-task references are not implementation ownership.
-  Census bindings and exact PR identities/links must survive a bounded recheck;
+  The inventory, census bindings and exact PR identities/links must survive a bounded recheck;
   this is observation consistency, not a cross-service lock or merge authority.
   Known conflicting bindings, ordinary canonical lookup failures and other
   malformed in-prefix identities remain failures
@@ -580,6 +580,18 @@ def verified_supporting_prs(
             if error or after != custody:
                 report_error(errors, error or "stack-custody-changed", "stack-custody")
                 return set()
+
+    # Individual PR reads cannot reveal a newly opened competing parent/head.
+    # Recheck the bounded complete inventory too, without depending on row order.
+    after_prs, error = command_json(
+        ["gh", "pr", "list", "--repo", slug, "--state", "open",
+         "--limit", str(OPEN_PR_LIMIT), "--json", STACK_PR_FIELDS], repo_root,
+    )
+    if (error or not isinstance(after_prs, list) or len(after_prs) >= OPEN_PR_LIMIT
+            or sorted(json.dumps(row, sort_keys=True) for row in after_prs)
+            != sorted(json.dumps(row, sort_keys=True) for row in prs)):
+        report_error(errors, error or "stack-inventory-changed", "stack-identity")
+        return set()
 
     verified: set[int] = set()
     for branch, (root, row) in slices.items():

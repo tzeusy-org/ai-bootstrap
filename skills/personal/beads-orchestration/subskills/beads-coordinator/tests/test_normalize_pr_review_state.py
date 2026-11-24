@@ -178,6 +178,11 @@ def install_fakes(fake_bin: FakeBinDir) -> None:
                 print(failure, file=sys.stderr)
                 raise SystemExit(1)
             rows = fixture.get("open_prs", [])
+            sequence = fixture.get("open_pr_sequence")
+            if sequence:
+                previous = [json.loads(line) for line in open(os.environ["NORMALIZER_CALLS"])]
+                count = sum(call["tool"] == "gh" and call["argv"][:2] == ["pr", "list"] for call in previous)
+                rows = sequence[min(count - 1, len(sequence) - 1)]
             if fixture.get("simulate_pr_limit") and isinstance(rows, list):
                 limit = int(argv[argv.index("--limit") + 1]) if "--limit" in argv else 30
                 rows = rows[:limit]
@@ -1952,6 +1957,7 @@ class NormalizePrReviewStateTests(unittest.TestCase):
             "hidden-duplicate-parent", "saturated", "above-cap", "delivery-owner",
             "legacy-source-reference", "missing-labels", "unknown-source-reference",
             "legacy-root-reference", "changed-canonical-reference", "invalid-census-shape",
+            "new-competing-parent", "recheck-saturated", "inventory-reordered",
         )
         for case in cases:
             with self.subTest(case=case):
@@ -2052,6 +2058,14 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                     if case == "hidden-duplicate-parent":
                         rows.append({**first, "number": 99})
                     fixture["simulate_pr_limit"] = case == "hidden-duplicate-parent"
+                elif case in {"new-competing-parent", "recheck-saturated", "inventory-reordered"}:
+                    after_rows = list(reversed(rows))
+                    if case == "new-competing-parent":
+                        after_rows.append({**first, "number": 99})
+                    elif case == "recheck-saturated":
+                        after_rows.extend({**disjoint, "number": 100 + i, "headRefName": f"docs/{i}"}
+                                          for i in range(996))
+                    fixture["open_pr_sequence"] = [list(rows), after_rows]
                 if case == "retargeted":
                     first["baseRefName"] = "main"
                 elif case == "cross-repo":
@@ -2105,7 +2119,7 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                     "other-canonical-root": [41, 44, 45],
                 }.get(case, [41, 44])
                 self.assertEqual([item["pr_number"] for item in candidates], expected_numbers)
-                if case in {"verified", "hidden-root", "review-reference", "missing-labels"}:
+                if case in {"verified", "hidden-root", "review-reference", "missing-labels", "inventory-reordered"}:
                     self.assertEqual(payload["status"], "success", payload["errors"])
                     self.assertEqual(payload["errors"], [])
                     self.assertEqual(candidates[0]["canonical_review_id"], review_id)
