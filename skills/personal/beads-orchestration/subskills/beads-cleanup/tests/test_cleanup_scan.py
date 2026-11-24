@@ -1926,7 +1926,7 @@ class CleanupScanTests(unittest.TestCase):
             {
                 "tool": "gh",
                 "argv": [
-                    "pr", "list", "--repo", "owner/repo", "--state", "open", "--json",
+                    "pr", "list", "--repo", "owner/repo", "--state", "open", "--limit", "1000", "--json",
                     "number,headRefName,createdAt,headRefOid,baseRefName,baseRefOid,isCrossRepository",
                 ],
             },

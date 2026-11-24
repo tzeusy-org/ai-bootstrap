@@ -125,7 +125,17 @@ def install_fakes(fake_bin: FakeBinDir) -> None:
             elif label == "pr-review":
                 print(json.dumps(fixture.get("pr_review_all", [])))
             else:
-                print(json.dumps([]))
+                records = {}
+                for row in fixture.get("blocked_pr_review", []) + fixture.get("pr_review_tasks_all", []):
+                    if isinstance(row, dict) and row.get("id"):
+                        records[row["id"]] = row
+                result = fixture.get("active_associations", list(records.values()))
+                sequence = fixture.get("association_sequence")
+                if sequence:
+                    previous = [json.loads(line) for line in open(os.environ["NORMALIZER_CALLS"])]
+                    count = sum(call["tool"] == "bd" and call["argv"] == sys.argv[1:] for call in previous)
+                    result = sequence[min(count - 1, len(sequence) - 1)]
+                print(json.dumps(result))
             raise SystemExit(0)
 
         if "show" in argv:
@@ -167,7 +177,11 @@ def install_fakes(fake_bin: FakeBinDir) -> None:
             if failure:
                 print(failure, file=sys.stderr)
                 raise SystemExit(1)
-            print(json.dumps(fixture.get("open_prs", [])))
+            rows = fixture.get("open_prs", [])
+            if fixture.get("simulate_pr_limit") and isinstance(rows, list):
+                limit = int(argv[argv.index("--limit") + 1]) if "--limit" in argv else 30
+                rows = rows[:limit]
+            print(json.dumps(rows))
             raise SystemExit(0)
         if argv[:2] == ["pr", "view"]:
             number = argv[2]
@@ -177,6 +191,8 @@ def install_fakes(fake_bin: FakeBinDir) -> None:
                 raise SystemExit(1)
             payload = fixture.get("prs", {}).get(str(number))
             sequence = fixture.get("pr_view_sequence")
+            if fixture.get("pr_view_sequences"):
+                sequence = fixture["pr_view_sequences"].get(number)
             if sequence:
                 previous = [json.loads(line) for line in open(os.environ["NORMALIZER_CALLS"])]
                 count = sum(call["tool"] == "gh" and call["argv"][:3] == argv[:3] for call in previous)
@@ -425,7 +441,7 @@ class NormalizePrReviewStateTests(unittest.TestCase):
             },
             "gh": {
                 ("repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"),
-                ("pr", "list", "--repo", "owner/repo", "--state", "open", "--json",
+                ("pr", "list", "--repo", "owner/repo", "--state", "open", "--limit", "1000", "--json",
                  "number,headRefName,createdAt,headRefOid,baseRefName,baseRefOid,isCrossRepository"),
                 ("pr", "view", "41", "--repo", "owner/repo", "--json", "number,state,mergedAt,createdAt,headRefOid"),
                 ("pr", "view", "42", "--repo", "owner/repo", "--json", "number,state,mergedAt,createdAt,headRefOid,headRefName"),
@@ -1929,6 +1945,13 @@ class NormalizePrReviewStateTests(unittest.TestCase):
             "missing-parent", "duplicate-head", "duplicate-number", "cycle",
             "malformed-metadata", "separately-bound", "no-review",
             "closed-root", "merged-root", "other-canonical-root", "non-dotted-anchor",
+            "hidden-root", "hidden-active-owner", "hidden-root-owner", "review-reference",
+            "deferred-owner", "missing-census-root", "census-failure", "malformed-census",
+            "duplicate-census", "changed-custody", "root-ref-changed", "parent-ref-changed",
+            "parent-number-changed", "parent-repo-changed", "changed-parent-on-recheck",
+            "hidden-duplicate-parent", "saturated", "above-cap", "delivery-owner",
+            "legacy-source-reference", "missing-labels", "unknown-source-reference",
+            "legacy-root-reference", "changed-canonical-reference", "invalid-census-shape",
         )
         for case in cases:
             with self.subTest(case=case):
@@ -1951,9 +1974,84 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                         review_id: {"ok": True, "original_id": original_id, "pr_number": 41},
                     },
                     "shows": {original_id: [anchor], "bu-disjoint": [{"id": "bu-disjoint", "status": "open"}]},
-                    "prs": {"41": dict(root_pr)},
+                    "prs": {str(pr["number"]): dict(pr) for pr in rows},
                     "open_prs": rows,
                 }
+                if case == "hidden-root":
+                    rows[0:0] = [
+                        {**disjoint, "number": 100 + i, "headRefName": f"docs/{i}"}
+                        for i in range(30)
+                    ]
+                    fixture["simulate_pr_limit"] = True
+                elif case in {"hidden-active-owner", "hidden-root-owner", "review-reference"}:
+                    owner = {**original_bead("bu-hidden", 41 if case == "hidden-root-owner" else 42),
+                             "status": "in_progress", "labels": []}
+                    if case == "review-reference":
+                        owner.update(labels=["pr-review", "pr-review-task"])
+                        # A review PR reference does not claim implementation custody.
+                        fixture["pr_review_tasks_all"] = [
+                            review_task(review_id, original_id), owner,
+                        ]
+                        owner["created_at"] = "2026-08-14T03:30:00Z"
+                        fixture["resolver_payloads"]["bu-hidden"] = {
+                            "ok": True, "original_id": original_id, "pr_number": 41,
+                        }
+                        owner["external_ref"] = "gh-pr:41"
+                    fixture["active_associations"] = [anchor, review_task(review_id, original_id), owner]
+                elif case in {"deferred-owner", "delivery-owner", "legacy-source-reference", "unknown-source-reference"}:
+                    owner = {"id": "bu-hidden", "status": "deferred", "labels": [], "external_ref": "gh-pr:42"}
+                    if case == "legacy-source-reference":
+                        owner["external_ref"] = "gh-42"
+                    elif case == "unknown-source-reference":
+                        owner["external_ref"] = "unknown:42"
+                    if case == "delivery-owner":
+                        owner["external_ref"] = ""
+                        owner["metadata"] = {"delivery": {
+                            "schema": "beads-delivery/v1", "anchor": "bu-hidden", "members": ["bu-hidden"],
+                            "owner": "coordinator:peer", "outcome": "bu-outcome", "base_branch": "main",
+                            "packet": "packet", "branch": first_slice,
+                        }}
+                    fixture["active_associations"] = [anchor, owner]
+                elif case == "missing-labels":
+                    fixture["active_associations"] = [anchor, {"id": "bu-unlabelled", "status": "open"}]
+                elif case == "missing-census-root":
+                    fixture["active_associations"] = []
+                elif case == "legacy-root-reference":
+                    fixture["active_associations"] = [{**anchor, "external_ref": "gh-41"}]
+                elif case == "invalid-census-shape":
+                    fixture["active_associations"] = {"records": [anchor]}
+                elif case == "census-failure":
+                    fixture["failures"] = {"bd-list:open,in_progress,blocked,deferred:": "read failed"}
+                elif case == "malformed-census":
+                    fixture["active_associations"] = [anchor, {"id": "bu-hidden", "status": "in_progress", "labels": "invalid"}]
+                elif case == "duplicate-census":
+                    fixture["active_associations"] = [anchor, anchor]
+                elif case == "changed-custody":
+                    fixture["association_sequence"] = [
+                        [anchor], [anchor, {**original_bead("bu-hidden", 42), "status": "open"}],
+                    ]
+                elif case == "changed-canonical-reference":
+                    fixture["association_sequence"] = [[anchor], [{**anchor, "external_ref": "gh-41"}]]
+                elif case in {"root-ref-changed", "parent-ref-changed", "parent-number-changed", "parent-repo-changed"}:
+                    target = fixture["prs"]["41" if case == "root-ref-changed" else "42"]
+                    key, value = {
+                        "root-ref-changed": ("headRefName", "agent/bu-other.1"),
+                        "parent-ref-changed": ("headRefName", "agent/bu-other.1-s2"),
+                        "parent-number-changed": ("number", 49),
+                        "parent-repo-changed": ("isCrossRepository", True),
+                    }[case]
+                    target[key] = value
+                elif case == "changed-parent-on-recheck":
+                    fixture["pr_view_sequences"] = {"42": [dict(first), {**first, "headRefOid": "e" * 40}]}
+                elif case in {"hidden-duplicate-parent", "saturated", "above-cap"}:
+                    count = 996 if case == "saturated" else 997 if case == "above-cap" else 30
+                    rows.extend([
+                        {**disjoint, "number": 100 + i, "headRefName": f"docs/{i}"}
+                        for i in range(count)
+                    ])
+                    if case == "hidden-duplicate-parent":
+                        rows.append({**first, "number": 99})
+                    fixture["simulate_pr_limit"] = case == "hidden-duplicate-parent"
                 if case == "retargeted":
                     first["baseRefName"] = "main"
                 elif case == "cross-repo":
@@ -1998,7 +2096,7 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                     rows.append(other_pr)
                     second.update(baseRefName=other_pr["headRefName"], baseRefOid=other_pr["headRefOid"])
 
-                result, _, _ = self.run_fixture(fixture)
+                result, calls, repo_root = self.run_fixture(fixture)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 payload = json.loads(result.stdout)
                 candidates = payload["self_heal_candidates"]
@@ -2007,12 +2105,18 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                     "other-canonical-root": [41, 44, 45],
                 }.get(case, [41, 44])
                 self.assertEqual([item["pr_number"] for item in candidates], expected_numbers)
-                if case == "verified":
+                if case in {"verified", "hidden-root", "review-reference", "missing-labels"}:
                     self.assertEqual(payload["status"], "success", payload["errors"])
                     self.assertEqual(payload["errors"], [])
                     self.assertEqual(candidates[0]["canonical_review_id"], review_id)
                     self.assertEqual(candidates[0]["recommendation"], "review-wiring-current")
                     self.assertEqual(candidates[1]["recommendation"], "self-heal-original-and-review-wiring")
+                    census = [call["argv"] for call in calls if call["tool"] == "bd"
+                              and "--include-ephemeral" in call["argv"]]
+                    expected = ["-C", repo_root, "list", "--status=open,in_progress,blocked,deferred",
+                                "--limit", "0", "--json", "--include-ephemeral", "--include-infra",
+                                "--include-templates", "--include-gates"]
+                    self.assertEqual(census, [expected, expected])
                 else:
                     self.assertEqual(payload["status"], "partial")
                     if case == "non-dotted-anchor":
@@ -2021,6 +2125,8 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                         self.assertIn({"code": "invalid-record", "scope": "open-prs"}, payload["errors"])
                     self.assertTrue(all(item["recommendation"] == "manual-triage"
                                         for item in payload["findings"] + candidates))
+                    if case in {"saturated", "above-cap"}:
+                        self.assertIn({"code": "open-pr-limit-reached", "scope": "open-prs"}, payload["errors"])
 
     def test_invalid_project_prefix_or_in_prefix_discovery_manualizes_collection(self) -> None:
         original_id = "bu-abc"
