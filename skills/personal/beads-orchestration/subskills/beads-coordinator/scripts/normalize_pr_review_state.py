@@ -34,9 +34,24 @@ fails:
   reuse one unambiguous canonical review/PR association after checking the
   original's current PR reference. Association is checked before branch
   inference: descriptive-hyphen branches with neither a known PR binding nor
-  a related known anchor infer no issue. Known conflicting bindings, ordinary
-  canonical lookup failures and other malformed in-prefix identities remain
-  failures
+  a related known anchor infer no issue. A dotted child with an `-sN` slice
+  suffix can be a supporting PR when its same-repository base chain reaches
+  one current canonical review head and no slice has a separate binding. Open
+  PR discovery is bounded at 1000 rows; saturation is incomplete, never a
+  completeness proof. Stack custody uses an unlabelled, unlimited census of
+  all active Beads (including deferred and normally hidden records), not just
+  review originals. Review-task references are not implementation ownership.
+  The inventory, census bindings and exact PR identities/links must survive a
+  bounded recheck; this is observation consistency, not a cross-service lock or
+  merge authority.
+  A differing stored base OID is accepted only with explicit current-link
+  corroboration in both read rounds: the same potentialMergeCommit OID, exact
+  same-repo pull merge ref, independent parent/child branch refs, and a commit
+  with exactly those two ordered parents. The stored base must itself be valid
+  and unchanged. Stale/missing/conflicting merge evidence remains partial;
+  ancestry alone is never supporting evidence.
+  Known conflicting bindings, ordinary canonical lookup failures and other
+  malformed in-prefix identities remain failures
 - relations: `review_relation_graph.review_relation_error` rejects malformed
   entries, self-links, duplicate review-ID left sides, a review ID reused in the
   original role, and reciprocal/longer cycles (`cyclic-review-relation`);
@@ -48,9 +63,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -65,7 +82,11 @@ from delivery_package import metadata as bead_metadata, validate_delivery
 
 SCHEMA = "beads-pr-review-normalization/v1"
 COOLDOWN = timedelta(minutes=5)
+OPEN_PR_LIMIT = 1000
+STACK_PR_FIELDS = "number,headRefName,createdAt,headRefOid,baseRefName,baseRefOid,isCrossRepository"
 BEAD_ID_RE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)+(?:\.[0-9]+)*\Z")
+PR_HEAD_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+STACK_SLICE_RE = re.compile(r"(agent/.+\.[0-9]+)-s[1-9][0-9]*[a-z]?\Z")
 ISSUE_PREFIX_RE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
 SAFE_CODE_RE = re.compile(r"[a-z0-9][a-z0-9-]*\Z")
 PR_STATES = frozenset({"OPEN", "CLOSED", "MERGED"})
@@ -124,6 +145,8 @@ def run_command(argv: list[str], repo_root: Path) -> subprocess.CompletedProcess
             cwd=repo_root,
             text=True,
             check=False,
+            stdin=subprocess.DEVNULL,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
         )
     except OSError:
         return None
@@ -324,7 +347,7 @@ def view_pr(
             cache[pr_number] = (None, "invalid-pr-number")
         elif payload["state"] not in PR_STATES:
             cache[pr_number] = (None, "invalid-pr-state")
-        elif not isinstance(payload.get("headRefOid"), str) or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", payload["headRefOid"]):
+        elif not isinstance(payload.get("headRefOid"), str) or not PR_HEAD_RE.fullmatch(payload["headRefOid"]):
             cache[pr_number] = (None, "invalid-pr-head")
         else:
             created_at = parse_time(payload.get("createdAt"))
@@ -493,12 +516,253 @@ def author_activity_evidence(
             "head_sha": before["headRefOid"]}, None
 
 
+def current_merge_parent(
+    child: dict[str, Any], parent: dict[str, Any], slug: str, repo_root: Path,
+) -> tuple[str | None, str | None]:
+    """Corroborate one current link, without interpreting ancestry or old base history."""
+    potential = child.get("potentialMergeCommit")
+    merge_oid = potential.get("oid") if isinstance(potential, dict) else None
+    if (not isinstance(merge_oid, str) or not PR_HEAD_RE.fullmatch(merge_oid)
+            or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", slug)):
+        return None, "invalid-stack-merge-proof"
+    expected = {
+        f"refs/heads/{parent['headRefName']}": parent["headRefOid"],
+        f"refs/heads/{child['headRefName']}": child["headRefOid"],
+        f"refs/pull/{child['number']}/merge": merge_oid,
+    }
+    refs = run_command(
+        ["git", "ls-remote", "--refs", f"https://github.com/{slug}.git", *expected], repo_root,
+    )
+    if refs is None or refs.returncode != 0:
+        return None, "stack-merge-ref-unavailable"
+    observed: dict[str, str] = {}
+    for line in refs.stdout.splitlines():
+        parts = line.split("\t")
+        if (len(parts) != 2 or not PR_HEAD_RE.fullmatch(parts[0])
+                or parts[1] not in expected or parts[1] in observed):
+            return None, "invalid-stack-merge-refs"
+        observed[parts[1]] = parts[0]
+    if observed != expected:
+        return None, "stack-merge-ref-mismatch"
+    commit, error = command_json(
+        ["gh", "api", f"repos/{slug}/git/commits/{merge_oid}",
+         "--jq", "{sha,parents:[.parents[].sha]}"], repo_root,
+    )
+    if error:
+        return None, error
+    if (not isinstance(commit, dict) or commit.get("sha") != merge_oid
+            or commit.get("parents") != [parent["headRefOid"], child["headRefOid"]]):
+        return None, "invalid-stack-merge-parents"
+    return merge_oid, None
+
+
+def verified_supporting_prs(
+    prs: list[object],
+    canonical_by_key: dict[tuple[str, int], str],
+    original_contexts: dict[str, tuple[dict[str, Any] | None, int | None, str | None]],
+    pr_cache: dict[int, tuple[dict[str, Any] | None, str | None]],
+    repo_root: Path,
+    errors: list[dict[str, str]],
+) -> set[int]:
+    """Find unbound slice PRs whose exact base links reach a canonical open head."""
+    if not any(isinstance(pr, dict) and isinstance(pr.get("headRefName"), str)
+               and STACK_SLICE_RE.fullmatch(pr["headRefName"]) for pr in prs):
+        return set()
+    custody, error = active_pr_associations(repo_root, prs)
+    if error:
+        report_error(errors, error, "stack-custody")
+        return set()
+    rows = [pr for pr in prs if isinstance(pr, dict)]
+    number_count = Counter(pr["number"] for pr in rows if valid_pr_number(pr.get("number")))
+    head_count = Counter(pr["headRefName"] for pr in rows if isinstance(pr.get("headRefName"), str))
+    by_head = {
+        pr["headRefName"]: pr for pr in rows
+        if valid_pr_number(pr.get("number")) and number_count[pr["number"]] == 1
+        and isinstance(pr.get("headRefName"), str) and head_count[pr["headRefName"]] == 1
+        and isinstance(pr.get("headRefOid"), str) and PR_HEAD_RE.fullmatch(pr["headRefOid"])
+        and pr.get("isCrossRepository") is False and parse_time(pr.get("createdAt"))
+    }
+    bindings = set(canonical_by_key) | {
+        (original, pr) for original, (_, pr, error) in original_contexts.items()
+        if error is None and pr is not None
+    }
+    bindings.update(custody)
+    bound_numbers = {number for _, number in bindings}
+    roots = {}
+    for original, number in canonical_by_key:
+        branch = f"agent/{original}"
+        row = by_head.get(branch)
+        live, error = pr_cache.get(number, (None, None))
+        if (
+            row and row["number"] == number and error is None and live
+            and live["state"] == "OPEN" and live["headRefOid"] == row["headRefOid"]
+            and live.get("headRefName", branch) == branch
+            and custody.get((original, number)) is True
+            and sum(bead == original for bead, _ in bindings) == 1
+            and sum(pr == number for _, pr in bindings) == 1
+        ):
+            roots[branch] = row
+
+    slices = {}
+    for branch, row in by_head.items():
+        match = STACK_SLICE_RE.fullmatch(branch)
+        if match and match[1] in roots and row["number"] not in bound_numbers:
+            slices[branch] = (match[1], row)
+
+    # Re-read the actual PR identities, including parents and the root ref, on
+    # both sides of the custody recheck. A cached OID or ancestry is insufficient.
+    related = {**roots, **{branch: row for branch, (_, row) in slices.items()}}
+    mismatched_parents = {}
+    for branch, (root, row) in slices.items():
+        base = row.get("baseRefName")
+        if not isinstance(base, str):
+            continue
+        parent = related.get(base)
+        same_chain = base == root or (base in slices and slices[base][0] == root)
+        stored_base = row.get("baseRefOid")
+        if (same_chain and parent and isinstance(stored_base, str)
+                and PR_HEAD_RE.fullmatch(stored_base) and stored_base != parent["headRefOid"]):
+            mismatched_parents[branch] = parent
+    merge_proofs: dict[str, list[str]] = {}
+    stable = set(related)
+    slug, error = repo_slug(repo_root)
+    for pass_number in range(2):
+        for branch, row in related.items():
+            live, error = command_json(
+                ["gh", "pr", "view", str(row["number"]), "--repo", slug,
+                 "--json", STACK_PR_FIELDS + ",state"
+                 + (",potentialMergeCommit" if branch in mismatched_parents else "")], repo_root,
+            )
+            if (error or not isinstance(live, dict) or not valid_pr_number(live.get("number"))
+                    or live.get("isCrossRepository") is not False or live.get("state") != "OPEN"
+                    or any(live.get(key) != row.get(key) for key in STACK_PR_FIELDS.split(","))):
+                stable.discard(branch)
+                report_error(errors, error or "stack-pr-changed", "stack-identity")
+            elif branch in mismatched_parents:
+                proof, error = current_merge_parent(live, mismatched_parents[branch], slug, repo_root)
+                if error:
+                    stable.discard(branch)
+                    report_error(errors, error, "stack-identity")
+                else:
+                    merge_proofs.setdefault(branch, []).append(proof)
+        if pass_number == 0:
+            after, error = active_pr_associations(repo_root, prs)
+            if error or after != custody:
+                report_error(errors, error or "stack-custody-changed", "stack-custody")
+                return set()
+
+    # Individual PR reads cannot reveal a newly opened competing parent/head.
+    # Recheck the bounded complete inventory too, without depending on row order.
+    after_prs, error = command_json(
+        ["gh", "pr", "list", "--repo", slug, "--state", "open",
+         "--limit", str(OPEN_PR_LIMIT), "--json", STACK_PR_FIELDS], repo_root,
+    )
+    if (error or not isinstance(after_prs, list) or len(after_prs) >= OPEN_PR_LIMIT
+            or sorted(json.dumps(row, sort_keys=True) for row in after_prs)
+            != sorted(json.dumps(row, sort_keys=True) for row in prs)):
+        report_error(errors, error or "stack-inventory-changed", "stack-identity")
+        return set()
+
+    verified: set[int] = set()
+    current_merge_links = {
+        branch for branch, proofs in merge_proofs.items()
+        if len(proofs) == 2 and proofs[0] == proofs[1]
+    }
+    if any(branch not in current_merge_links for branch in merge_proofs):
+        report_error(errors, "stack-merge-proof-changed", "stack-identity")
+    for branch, (root, row) in slices.items():
+        if branch not in stable or root not in stable:
+            continue
+        visited = {branch}
+        current = row
+        while isinstance(base := current.get("baseRefName"), str) and base not in visited:
+            parent = by_head.get(base)
+            if (parent is None or base not in stable
+                    or (current.get("baseRefOid") != parent["headRefOid"]
+                        and current["headRefName"] not in current_merge_links)):
+                break
+            if base == root:
+                verified.add(row["number"])
+                break
+            if base not in slices or slices[base][0] != root:
+                break
+            visited.add(base)
+            current = parent
+    return verified
+
+
+def active_pr_associations(
+    repo_root: Path, prs: list[object],
+) -> tuple[dict[tuple[str, int], bool], str | None]:
+    """Authoritative PR custody across every active status, without label filters.
+
+    Include the bd list categories hidden by default. Unlimited list output (or
+    its nonzero failure) is the completeness boundary; never infer absence from
+    the review queue. Accepted active delivery branches also establish custody.
+    True means an exact canonical gh-pr:N binding; other custody evidence can
+    obstruct a stack but cannot establish its root.
+    """
+    records, error = command_json(
+        ["bd", "-C", str(repo_root), "list", "--status=open,in_progress,blocked,deferred",
+         "--limit", "0", "--json", "--include-ephemeral", "--include-infra",
+         "--include-templates", "--include-gates"], repo_root,
+    )
+    if error:
+        return {}, error
+    if not isinstance(records, list):
+        return {}, "invalid-association-inventory"
+    bindings: dict[tuple[str, int], bool] = {}
+    seen: set[str] = set()
+    for row in records:
+        if not isinstance(row, dict):
+            return {}, "invalid-association-record"
+        issue_id = record_id(row)
+        if (issue_id is None or issue_id in seen
+                or row.get("status") not in {"open", "in_progress", "blocked", "deferred"}
+                or (row.get("labels") is not None and not isinstance(row["labels"], list))
+                or any(not isinstance(label, str) for label in (row.get("labels") or []))):
+            return {}, "invalid-association-record"
+        seen.add(issue_id)
+        if "pr-review-task" in labels(row):
+            if "pr-review" not in labels(row):
+                return {}, "invalid-association-record"
+            continue  # A review's PR reference is not source ownership.
+        reference = row.get("external_ref")
+        number = pr_number_from_ref(reference)
+        # Old gh-N references can obstruct custody, never establish canonical
+        # review wiring or authorize historical branch-name inference.
+        legacy_ref = re.fullmatch(r"gh-([0-9]+)", reference) if isinstance(reference, str) else None
+        if number is None and legacy_ref:
+            number = int(legacy_ref[1])
+        if reference not in (None, "") and (number is None or not valid_pr_number(number)):
+            return {}, "unproven-pr-association"
+        if number is not None:
+            bindings[(issue_id, number)] = reference == f"gh-pr:{number}"
+        try:
+            delivery = bead_metadata(row).get("delivery")
+            if delivery is not None:
+                delivery = validate_delivery(delivery)
+                if delivery["anchor"] != issue_id:
+                    return {}, "invalid-association-record"
+                if delivery.get("state", "active") == "active":
+                    branch = delivery.get("branch", f"agent/{issue_id}")
+                    for pr in prs:
+                        if isinstance(pr, dict) and pr.get("headRefName") == branch:
+                            if not valid_pr_number(pr.get("number")):
+                                return {}, "invalid-association-record"
+                            bindings.setdefault((issue_id, pr["number"]), False)
+        except ValueError:
+            return {}, "invalid-association-record"
+    return bindings, None
+
+
 def self_heal_candidates(
     *,
     repo_root: Path,
     now: datetime,
     canonical_by_key: dict[tuple[str, int], str],
     original_contexts: dict[str, tuple[dict[str, Any] | None, int | None, str | None]],
+    pr_cache: dict[int, tuple[dict[str, Any] | None, str | None]],
     task_lookup_complete: bool,
     errors: list[dict[str, str]],
 ) -> tuple[list[dict[str, Any]], bool]:
@@ -523,7 +787,8 @@ def self_heal_candidates(
     slug, error = repo_slug(repo_root)
     if not error:
         payload, error = command_json(
-            ["gh", "pr", "list", "--repo", slug, "--state", "open", "--json", "number,headRefName,createdAt"],
+            ["gh", "pr", "list", "--repo", slug, "--state", "open",
+             "--limit", str(OPEN_PR_LIMIT), "--json", STACK_PR_FIELDS],
             repo_root,
         )
     if error:
@@ -534,7 +799,21 @@ def self_heal_candidates(
         return [], False
 
     candidates: list[dict[str, Any]] = []
-    discovery_complete = True
+    discovery_complete = len(payload) < OPEN_PR_LIMIT
+    if not discovery_complete:
+        report_error(errors, "open-pr-limit-reached", "open-prs")
+    rows = [row for row in payload if isinstance(row, dict)]
+    numbers = [row["number"] for row in rows if valid_pr_number(row.get("number"))]
+    heads = [row["headRefName"] for row in rows if isinstance(row.get("headRefName"), str)]
+    if len(set(numbers)) != len(numbers) or len(set(heads)) != len(heads):
+        report_error(errors, "duplicate-pr-identity", "open-prs")
+        discovery_complete = False
+    supporting_prs = (
+        verified_supporting_prs(payload, canonical_by_key, original_contexts, pr_cache, repo_root, errors)
+        if task_lookup_complete and discovery_complete else set()
+    )
+    if any(error["scope"] in {"stack-custody", "stack-identity"} for error in errors):
+        discovery_complete = False
     for item in payload:
         if not isinstance(item, dict):
             report_error(errors, "invalid-record", "open-prs")
@@ -564,6 +843,8 @@ def self_heal_candidates(
                 original_id == anchor or original_id.startswith(f"{anchor}-")
                 for anchor in known_originals
             )
+            if valid_pr_number(number) and number in supporting_prs:
+                continue
             if not known_pr and not related_anchor and "-" in original_id[len(prefix) + 1:]:
                 continue
         if not BEAD_ID_RE.fullmatch(original_id):
@@ -1143,6 +1424,7 @@ def normalize(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         now=now,
         canonical_by_key=canonical_by_key,
         original_contexts=original_contexts,
+        pr_cache=pr_cache,
         task_lookup_complete=pre_discovery_collection_complete,
         errors=errors,
     )
