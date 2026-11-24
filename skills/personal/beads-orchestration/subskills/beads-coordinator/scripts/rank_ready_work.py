@@ -106,7 +106,10 @@ they wait on), `childless_epics` for decomposition, and `closable_epics`
 (every child closed; a candidate hint, never acceptance or activation proof).
 
 Fail-closed: a failed `bd` command or unexpected output yields `status: fatal`
-and no queue. bd older than 1.3 rejects `--brief` and fails this way. The
+and no queue. A ready identity missing from live inventory retries all four
+inventory queries once before package/dependency hydration; persistent drift
+yields `ready-live-drift`. Direct rank inputs use the same validation.
+bd older than 1.3 rejects `--brief` and fails this way. The
 coordinator then dispatches nothing that wake (`coordinator-loop.md` Step 1).
 """
 
@@ -200,11 +203,19 @@ def collect(repo_root: Path, *, with_dependencies: bool = False) -> tuple[dict[s
         "kv": ["kv", "list", "--json"],
     }
     snapshot: dict[str, Any] = {}
-    for name, argv in queries.items():
-        payload, error = bd_json(argv, repo_root)
-        if error:
-            return None, {"code": error, "scope": name}
-        snapshot[name] = payload
+    # Separate tracker reads can straddle a peer's claim, release, or reopen.
+    # Retry before resolving package and dependency rows for an inconsistent view.
+    for attempt in range(2):
+        for name, argv in queries.items():
+            payload, error = bd_json(argv, repo_root)
+            if error:
+                return None, {"code": error, "scope": name}
+            snapshot[name] = payload
+        problem = validate(snapshot)
+        if problem is None:
+            break
+        if problem["code"] != "ready-live-drift" or attempt == 1:
+            return None, problem
     # Closed members and anchors remain traceability evidence for a partially
     # delivered package. Fetch only missing identities, never the closed archive.
     if isinstance(snapshot.get("live"), list):
@@ -299,6 +310,9 @@ def validate(snapshot: dict[str, Any]) -> dict[str, str] | None:
     for entry in snapshot["epics"]:
         if not (isinstance(entry, dict) and isinstance(entry.get("epic"), dict) and isinstance(entry["epic"].get("id"), str)):
             return {"code": "invalid-record", "scope": "epics"}
+    live_ids = {row["id"] for row in snapshot["live"]}
+    if any(row["id"] not in live_ids for row in snapshot["ready"]):
+        return {"code": "ready-live-drift", "scope": "snapshot"}
     return None
 
 
