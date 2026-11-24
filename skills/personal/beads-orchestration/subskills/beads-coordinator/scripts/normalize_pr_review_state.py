@@ -41,8 +41,15 @@ fails:
   completeness proof. Stack custody uses an unlabelled, unlimited census of
   all active Beads (including deferred and normally hidden records), not just
   review originals. Review-task references are not implementation ownership.
-  The inventory, census bindings and exact PR identities/links must survive a bounded recheck;
-  this is observation consistency, not a cross-service lock or merge authority.
+  The inventory, census bindings and exact PR identities/links must survive a
+  bounded recheck; this is observation consistency, not a cross-service lock or
+  merge authority.
+  A differing stored base OID is accepted only with explicit current-link
+  corroboration in both read rounds: the same potentialMergeCommit OID, exact
+  same-repo pull merge ref, independent parent/child branch refs, and a commit
+  with exactly those two ordered parents. The stored base must itself be valid
+  and unchanged. Stale/missing/conflicting merge evidence remains partial;
+  ancestry alone is never supporting evidence.
   Known conflicting bindings, ordinary canonical lookup failures and other
   malformed in-prefix identities remain failures
 - relations: `review_relation_graph.review_relation_error` rejects malformed
@@ -56,6 +63,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -137,6 +145,8 @@ def run_command(argv: list[str], repo_root: Path) -> subprocess.CompletedProcess
             cwd=repo_root,
             text=True,
             check=False,
+            stdin=subprocess.DEVNULL,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
         )
     except OSError:
         return None
@@ -506,6 +516,46 @@ def author_activity_evidence(
             "head_sha": before["headRefOid"]}, None
 
 
+def current_merge_parent(
+    child: dict[str, Any], parent: dict[str, Any], slug: str, repo_root: Path,
+) -> tuple[str | None, str | None]:
+    """Corroborate one current link, without interpreting ancestry or old base history."""
+    potential = child.get("potentialMergeCommit")
+    merge_oid = potential.get("oid") if isinstance(potential, dict) else None
+    if (not isinstance(merge_oid, str) or not PR_HEAD_RE.fullmatch(merge_oid)
+            or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", slug)):
+        return None, "invalid-stack-merge-proof"
+    expected = {
+        f"refs/heads/{parent['headRefName']}": parent["headRefOid"],
+        f"refs/heads/{child['headRefName']}": child["headRefOid"],
+        f"refs/pull/{child['number']}/merge": merge_oid,
+    }
+    refs = run_command(
+        ["git", "ls-remote", "--refs", f"https://github.com/{slug}.git", *expected], repo_root,
+    )
+    if refs is None or refs.returncode != 0:
+        return None, "stack-merge-ref-unavailable"
+    observed: dict[str, str] = {}
+    for line in refs.stdout.splitlines():
+        parts = line.split("\t")
+        if (len(parts) != 2 or not PR_HEAD_RE.fullmatch(parts[0])
+                or parts[1] not in expected or parts[1] in observed):
+            return None, "invalid-stack-merge-refs"
+        observed[parts[1]] = parts[0]
+    if observed != expected:
+        return None, "stack-merge-ref-mismatch"
+    commit, error = command_json(
+        ["gh", "api", f"repos/{slug}/git/commits/{merge_oid}",
+         "--jq", "{sha,parents:[.parents[].sha]}"], repo_root,
+    )
+    if error:
+        return None, error
+    if (not isinstance(commit, dict) or commit.get("sha") != merge_oid
+            or commit.get("parents") != [parent["headRefOid"], child["headRefOid"]]):
+        return None, "invalid-stack-merge-parents"
+    return merge_oid, None
+
+
 def verified_supporting_prs(
     prs: list[object],
     canonical_by_key: dict[tuple[str, int], str],
@@ -562,19 +612,39 @@ def verified_supporting_prs(
     # Re-read the actual PR identities, including parents and the root ref, on
     # both sides of the custody recheck. A cached OID or ancestry is insufficient.
     related = {**roots, **{branch: row for branch, (_, row) in slices.items()}}
+    mismatched_parents = {}
+    for branch, (root, row) in slices.items():
+        base = row.get("baseRefName")
+        if not isinstance(base, str):
+            continue
+        parent = related.get(base)
+        same_chain = base == root or (base in slices and slices[base][0] == root)
+        stored_base = row.get("baseRefOid")
+        if (same_chain and parent and isinstance(stored_base, str)
+                and PR_HEAD_RE.fullmatch(stored_base) and stored_base != parent["headRefOid"]):
+            mismatched_parents[branch] = parent
+    merge_proofs: dict[str, list[str]] = {}
     stable = set(related)
     slug, error = repo_slug(repo_root)
     for pass_number in range(2):
         for branch, row in related.items():
             live, error = command_json(
                 ["gh", "pr", "view", str(row["number"]), "--repo", slug,
-                 "--json", STACK_PR_FIELDS + ",state"], repo_root,
+                 "--json", STACK_PR_FIELDS + ",state"
+                 + (",potentialMergeCommit" if branch in mismatched_parents else "")], repo_root,
             )
             if (error or not isinstance(live, dict) or not valid_pr_number(live.get("number"))
                     or live.get("isCrossRepository") is not False or live.get("state") != "OPEN"
                     or any(live.get(key) != row.get(key) for key in STACK_PR_FIELDS.split(","))):
                 stable.discard(branch)
                 report_error(errors, error or "stack-pr-changed", "stack-identity")
+            elif branch in mismatched_parents:
+                proof, error = current_merge_parent(live, mismatched_parents[branch], slug, repo_root)
+                if error:
+                    stable.discard(branch)
+                    report_error(errors, error, "stack-identity")
+                else:
+                    merge_proofs.setdefault(branch, []).append(proof)
         if pass_number == 0:
             after, error = active_pr_associations(repo_root, prs)
             if error or after != custody:
@@ -594,6 +664,12 @@ def verified_supporting_prs(
         return set()
 
     verified: set[int] = set()
+    current_merge_links = {
+        branch for branch, proofs in merge_proofs.items()
+        if len(proofs) == 2 and proofs[0] == proofs[1]
+    }
+    if any(branch not in current_merge_links for branch in merge_proofs):
+        report_error(errors, "stack-merge-proof-changed", "stack-identity")
     for branch, (root, row) in slices.items():
         if branch not in stable or root not in stable:
             continue
@@ -601,7 +677,9 @@ def verified_supporting_prs(
         current = row
         while isinstance(base := current.get("baseRefName"), str) and base not in visited:
             parent = by_head.get(base)
-            if parent is None or base not in stable or current.get("baseRefOid") != parent["headRefOid"]:
+            if (parent is None or base not in stable
+                    or (current.get("baseRefOid") != parent["headRefOid"]
+                        and current["headRefName"] not in current_merge_links)):
                 break
             if base == root:
                 verified.add(row["number"])

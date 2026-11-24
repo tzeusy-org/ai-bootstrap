@@ -165,6 +165,15 @@ def install_fakes(fake_bin: FakeBinDir) -> None:
             calls.write(json.dumps({"tool": "gh", "argv": sys.argv[1:]}) + "\\n")
 
         argv = sys.argv[1:]
+        if argv[:1] == ["api"]:
+            path = argv[1]
+            failure = fixture.get("failures", {}).get(f"gh-api:{path}")
+            payload = fixture.get("api_payloads", {}).get(path)
+            if failure or payload is None:
+                print("unavailable API fixture", file=sys.stderr)
+                raise SystemExit(1)
+            print(json.dumps(payload))
+            raise SystemExit(0)
         if argv[:2] == ["repo", "view"]:
             failure = fixture.get("failures", {}).get("gh-repo-view")
             if failure:
@@ -218,8 +227,14 @@ def install_fakes(fake_bin: FakeBinDir) -> None:
         import os
         import sys
 
+        fixture = json.loads(open(os.environ["NORMALIZER_FIXTURE"], encoding="utf-8").read())
         with open(os.environ["NORMALIZER_CALLS"], "a", encoding="utf-8") as calls:
             calls.write(json.dumps({"tool": "git", "argv": sys.argv[1:]}) + "\\n")
+        if "ls-remote" in sys.argv:
+            reads = fixture.get("merge_ref_reads", [""])
+            previous = [json.loads(line) for line in open(os.environ["NORMALIZER_CALLS"])]
+            count = sum(call["tool"] == "git" and "ls-remote" in call["argv"] for call in previous)
+            print(reads[min(count - 1, len(reads) - 1)], end="")
         raise SystemExit(0)
         """,
     )
@@ -1958,6 +1973,12 @@ class NormalizePrReviewStateTests(unittest.TestCase):
             "legacy-source-reference", "missing-labels", "unknown-source-reference",
             "legacy-root-reference", "changed-canonical-reference", "invalid-census-shape",
             "new-competing-parent", "recheck-saturated", "inventory-reordered",
+            "merge-exact", "merge-stale-parent", "merge-stale-child", "merge-wrong-order",
+            "merge-parent-moved", "merge-child-moved", "merge-ref-moved", "merge-regenerated",
+            "merge-missing-ref", "merge-missing-potential", "merge-missing-commit",
+            "merge-ambiguous-refs", "merge-wrong-pr-ref", "merge-malformed-parents",
+            "merge-malformed-sha", "merge-malformed-base", "merge-parent-rollback",
+            "merge-owned-child", "merge-custody-changed",
         )
         for case in cases:
             with self.subTest(case=case):
@@ -1983,6 +2004,64 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                     "prs": {str(pr["number"]): dict(pr) for pr in rows},
                     "open_prs": rows,
                 }
+                if case.startswith("merge-"):
+                    second["baseRefOid"] = "d" * 40
+                    fixture["prs"]["43"] = {**second, "potentialMergeCommit": {"oid": "e" * 40}}
+                    commit = {"sha": "e" * 40, "parents": ["b" * 40, "c" * 40]}
+                    fixture["api_payloads"] = {f"repos/owner/repo/git/commits/{'e' * 40}": commit}
+                    refs = {f"refs/heads/{first_slice}": "b" * 40,
+                            f"refs/heads/{second_slice}": "c" * 40,
+                            "refs/pull/43/merge": "e" * 40}
+                    if case == "merge-stale-parent":
+                        commit["parents"][0] = "d" * 40
+                    elif case == "merge-stale-child":
+                        commit["parents"][1] = "d" * 40
+                    elif case == "merge-wrong-order":
+                        commit["parents"].reverse()
+                    elif case == "merge-parent-moved":
+                        refs[f"refs/heads/{first_slice}"] = "f" * 40
+                    elif case == "merge-child-moved":
+                        refs[f"refs/heads/{second_slice}"] = "f" * 40
+                    elif case == "merge-missing-ref":
+                        refs.pop("refs/pull/43/merge")
+                    elif case == "merge-missing-potential":
+                        fixture["prs"]["43"]["potentialMergeCommit"] = None
+                    elif case == "merge-missing-commit":
+                        fixture["api_payloads"] = {}
+                    elif case == "merge-wrong-pr-ref":
+                        refs["refs/pull/42/merge"] = refs.pop("refs/pull/43/merge")
+                    elif case == "merge-malformed-parents":
+                        commit["parents"].append("d" * 40)
+                    elif case == "merge-malformed-sha":
+                        commit["sha"] = "f" * 40
+                    elif case == "merge-malformed-base":
+                        second["baseRefOid"] = None
+                        fixture["prs"]["43"]["baseRefOid"] = None
+                    elif case == "merge-parent-rollback":
+                        refs[f"refs/heads/{first_slice}"] = "a" * 40
+                        commit["parents"][0] = "a" * 40
+                    elif case == "merge-owned-child":
+                        fixture["active_associations"] = [anchor, {
+                            "id": "bu-hidden", "status": "in_progress", "external_ref": "gh-pr:43",
+                        }]
+                    elif case == "merge-custody-changed":
+                        fixture["association_sequence"] = [[anchor], [anchor, {
+                            "id": "bu-hidden", "status": "deferred", "external_ref": "gh-pr:43",
+                        }]]
+                    ref_text = "".join(f"{oid}\t{ref}\n" for ref, oid in refs.items())
+                    fixture["merge_ref_reads"] = [ref_text, ref_text]
+                    if case == "merge-ambiguous-refs":
+                        fixture["merge_ref_reads"] = [ref_text + f"{'e' * 40}\trefs/pull/43/merge\n"]
+                    elif case == "merge-ref-moved":
+                        fixture["merge_ref_reads"][1] = ref_text.replace("e" * 40, "f" * 40)
+                    elif case == "merge-regenerated":
+                        fixture["pr_view_sequences"] = {"43": [fixture["prs"]["43"], {
+                            **fixture["prs"]["43"], "potentialMergeCommit": {"oid": "f" * 40},
+                        }]}
+                        fixture["merge_ref_reads"][1] = ref_text.replace("e" * 40, "f" * 40)
+                        fixture["api_payloads"][f"repos/owner/repo/git/commits/{'f' * 40}"] = {
+                            "sha": "f" * 40, "parents": ["b" * 40, "c" * 40],
+                        }
                 if case == "hidden-root":
                     rows[0:0] = [
                         {**disjoint, "number": 100 + i, "headRefName": f"docs/{i}"}
@@ -2119,7 +2198,7 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                     "other-canonical-root": [41, 44, 45],
                 }.get(case, [41, 44])
                 self.assertEqual([item["pr_number"] for item in candidates], expected_numbers)
-                if case in {"verified", "hidden-root", "review-reference", "missing-labels", "inventory-reordered"}:
+                if case in {"verified", "hidden-root", "review-reference", "missing-labels", "inventory-reordered", "merge-exact"}:
                     self.assertEqual(payload["status"], "success", payload["errors"])
                     self.assertEqual(payload["errors"], [])
                     self.assertEqual(candidates[0]["canonical_review_id"], review_id)
@@ -2131,6 +2210,11 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                                 "--limit", "0", "--json", "--include-ephemeral", "--include-infra",
                                 "--include-templates", "--include-gates"]
                     self.assertEqual(census, [expected, expected])
+                    if case == "merge-exact":
+                        ref_reads = [call["argv"] for call in calls if call["tool"] == "git"]
+                        self.assertEqual(ref_reads, [["ls-remote", "--refs", "https://github.com/owner/repo.git",
+                                                     f"refs/heads/{first_slice}", f"refs/heads/{second_slice}",
+                                                     "refs/pull/43/merge"]] * 2)
                 else:
                     self.assertEqual(payload["status"], "partial")
                     if case == "non-dotted-anchor":
@@ -2141,6 +2225,8 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                                         for item in payload["findings"] + candidates))
                     if case in {"saturated", "above-cap"}:
                         self.assertIn({"code": "open-pr-limit-reached", "scope": "open-prs"}, payload["errors"])
+                    if case == "merge-owned-child":
+                        self.assertFalse(any(call["tool"] == "git" for call in calls))
 
     def test_invalid_project_prefix_or_in_prefix_discovery_manualizes_collection(self) -> None:
         original_id = "bu-abc"
