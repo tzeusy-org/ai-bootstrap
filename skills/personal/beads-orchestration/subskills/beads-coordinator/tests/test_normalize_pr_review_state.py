@@ -107,6 +107,11 @@ def install_fakes(fake_bin: FakeBinDir) -> None:
             raise SystemExit(0)
 
         if "list" in argv:
+            if "--external-ref" in argv:
+                reference = argv[argv.index("--external-ref") + 1]
+                fail(f"bd-owners:{reference}")
+                print(json.dumps(fixture.get("owners", {}).get(reference, [])))
+                raise SystemExit(0)
             label = argv[argv.index("--label") + 1] if "--label" in argv else ""
             status = next((part.split("=", 1)[1] for part in argv if part.startswith("--status=")), "")
             key = f"bd-list:{status}:{label}"
@@ -165,9 +170,12 @@ def install_fakes(fake_bin: FakeBinDir) -> None:
         if argv[:2] == ["pr", "list"]:
             failure = fixture.get("failures", {}).get("gh-pr-list")
             if failure:
+                print(json.dumps(fixture.get("open_prs", [])))
                 print(failure, file=sys.stderr)
                 raise SystemExit(1)
-            print(json.dumps(fixture.get("open_prs", [])))
+            payload = fixture.get("open_prs", [])
+            limit = int(argv[argv.index("--limit") + 1]) if "--limit" in argv else 30
+            print(json.dumps(payload[:limit] if isinstance(payload, list) else payload))
             raise SystemExit(0)
         if argv[:2] == ["pr", "view"]:
             number = argv[2]
@@ -425,7 +433,7 @@ class NormalizePrReviewStateTests(unittest.TestCase):
             },
             "gh": {
                 ("repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"),
-                ("pr", "list", "--repo", "owner/repo", "--state", "open", "--json", "number,headRefName,createdAt"),
+                ("pr", "list", "--repo", "owner/repo", "--state", "open", "--limit", "1000", "--json", "number,headRefName,createdAt"),
                 ("pr", "view", "41", "--repo", "owner/repo", "--json", "number,state,mergedAt,createdAt,headRefOid"),
                 ("pr", "view", "42", "--repo", "owner/repo", "--json", "number,state,mergedAt,createdAt,headRefOid,headRefName"),
             },
@@ -1659,24 +1667,38 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                 }
             ],
         }
+        open_prs = base_fixture["open_prs"]
+        foreign_prs = [
+            {"number": 100 + index, "headRefName": f"feature/foreign-{index}"}
+            for index in range(1000)
+        ]
         cases = {
-            "open-pr-list-failure": ({"gh-pr-list": "read failed"}, False),
+            "open-pr-list-failure": ({"gh-pr-list": "read failed"}, open_prs, "command-failed"),
             "mixed-pr-state-and-open-pr-failure": (
                 {"gh-pr-view:41": "read failed", "gh-pr-list": "read failed"},
-                False,
+                open_prs,
+                "command-failed",
             ),
-            "valid-dedupe-control": ({}, True),
+            "valid-dedupe-control": ({}, open_prs, None),
+            "beyond-default-limit": ({}, foreign_prs[:30] + open_prs, None),
+            "below-cap": ({}, foreign_prs[:998] + open_prs, None),
+            "at-cap": ({}, foreign_prs[:999] + open_prs, "open-pr-limit-reached"),
+            "above-cap": ({}, foreign_prs + open_prs, "open-pr-limit-reached"),
+            "malformed-tail": ({}, foreign_prs[:30] + [None] + open_prs, "invalid-record"),
+            "malformed-envelope": ({}, {"items": open_prs}, "invalid-json"),
         }
-        for name, (failures, actionable) in cases.items():
+        for name, (failures, inventory, error_code) in cases.items():
             with self.subTest(name=name):
-                result, _, _ = self.run_fixture({**base_fixture, "failures": failures})
+                result, _, _ = self.run_fixture({
+                    **base_fixture, "failures": failures, "open_prs": inventory,
+                })
 
                 self.assertEqual(result.returncode, 0, result.stderr)
                 payload = json.loads(result.stdout)
-                if not actionable:
+                if error_code is not None:
                     self.assertEqual(payload["status"], "partial")
                     self.assertIn(
-                        {"code": "command-failed", "scope": "open-prs"},
+                        {"code": error_code, "scope": "open-prs"},
                         payload["errors"],
                     )
                     if name == "mixed-pr-state-and-open-pr-failure":
@@ -1706,6 +1728,8 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                     if finding["review_id"] == duplicate_review_id
                 )
                 self.assertEqual(duplicate["recommendation"], "dedupe-review-task")
+                self.assertEqual(len(payload["self_heal_candidates"]), 1)
+                self.assertEqual(payload["self_heal_candidates"][0]["pr_number"], 41)
                 self.assertEqual(
                     payload["self_heal_candidates"][0]["recommendation"],
                     "review-wiring-current",
@@ -1793,6 +1817,13 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                 self.assertEqual(looked_up, [original_id])
 
     def test_legacy_branch_requires_unambiguous_canonical_pr_association(self) -> None:
+        ownership_cases = (
+            "owner-missing", "owner-duplicate", "owner-duplicate-id",
+            "owner-envelope", "owner-item", "owner-invalid-id", "owner-foreign-id",
+            "owner-status", "owner-labels", "owner-label-item", "owner-review-task",
+            "owner-malformed-ref", "owner-wrong-ref", "owner-query-failure",
+            "owner-stale-status", "owner-stale-labels",
+        )
         dated_cases = (
             "dotted-anchor", "plain-anchor", "named-package", "named-hyphen-package",
             "canonical-control", "no-review",
@@ -1810,8 +1841,8 @@ class NormalizePrReviewStateTests(unittest.TestCase):
             "incomplete-context", "invalid-review-created-at", "invalid-package",
             "uppercase-suffix", "hyphen-suffix", "plain-anchor-suffix",
         )
-        for spelling, case in ([("dated", case) for case in dated_cases]
-                               + [("attached", case) for case in attached_cases]):
+        for spelling, case in ([("dated", case) for case in dated_cases + ownership_cases]
+                               + [("attached", case) for case in attached_cases + ownership_cases]):
             with self.subTest(spelling=spelling, case=case):
                 original_id = "bu-abc" if case in {"plain-anchor", "plain-anchor-suffix"} else "bu-abc.1"
                 if case == "nested-child":
@@ -1825,6 +1856,7 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                         review_id: {"ok": True, "original_id": original_id, "pr_number": 41},
                     },
                     "shows": {original_id: [dict(original)]},
+                    "owners": {"gh-pr:41": [dict(original)]},
                     "prs": {"41": pr_payload("OPEN")},
                     "open_prs": [{
                         "number": 41,
@@ -1838,6 +1870,7 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                     fixture["open_prs"][0]["headRefName"] += "2"
                 elif case == "canonical-control":
                     fixture["open_prs"][0]["headRefName"] = f"agent/{original_id}"
+                    fixture["owners"]["gh-pr:41"] = []
                 elif case in {"named-package", "named-hyphen-package"}:
                     suffix = "chronicler" if case == "named-package" else "chronicler-public-2"
                     fixture["open_prs"][0]["headRefName"] = f"agent/{original_id}-{suffix}"
@@ -1893,10 +1926,46 @@ class NormalizePrReviewStateTests(unittest.TestCase):
                     fixture["open_prs"][0]["headRefName"] = f"agent/{original_id}-20261340"
                 elif case == "unknown-suffix":
                     fixture["open_prs"][0]["headRefName"] += "-extra"
+                elif case == "owner-missing":
+                    fixture["owners"]["gh-pr:41"] = []
+                elif case in {"owner-duplicate", "owner-duplicate-id"}:
+                    other_id = "bu-other" if case == "owner-duplicate" else original_id
+                    fixture["owners"]["gh-pr:41"].append(original_bead(other_id, 41))
+                elif case == "owner-envelope":
+                    fixture["owners"]["gh-pr:41"] = {"id": original_id}
+                elif case == "owner-item":
+                    fixture["owners"]["gh-pr:41"] = [None]
+                elif case in {"owner-invalid-id", "owner-foreign-id"}:
+                    fixture["owners"]["gh-pr:41"][0]["id"] = (
+                        "bad id" if case == "owner-invalid-id" else "bu-foreign"
+                    )
+                elif case == "owner-status":
+                    fixture["owners"]["gh-pr:41"][0]["status"] = "unknown"
+                elif case in {"owner-labels", "owner-label-item"}:
+                    fixture["owners"]["gh-pr:41"][0]["labels"] = (
+                        "pr-review" if case == "owner-labels" else ["pr-review", None]
+                    )
+                elif case == "owner-review-task":
+                    fixture["owners"]["gh-pr:41"][0]["labels"] = ["pr-review", "pr-review-task"]
+                elif case in {"owner-malformed-ref", "owner-wrong-ref"}:
+                    fixture["owners"]["gh-pr:41"][0]["external_ref"] = (
+                        "gh-pr:bad" if case == "owner-malformed-ref" else "gh-pr:42"
+                    )
+                elif case == "owner-query-failure":
+                    fixture["failures"] = {"bd-owners:gh-pr:41": "lookup failed"}
+                elif case == "owner-stale-status":
+                    fixture["shows"][original_id][0]["status"] = "closed"
+                elif case == "owner-stale-labels":
+                    fixture["shows"][original_id][0]["labels"] = []
 
                 result, calls, _ = self.run_fixture(fixture)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 payload = json.loads(result.stdout)
+                owner_queries = [call["argv"] for call in calls
+                                 if call["tool"] == "bd" and "--external-ref" in call["argv"]]
+                if case in {"canonical-control", "no-review", "second-review-anchor",
+                            "second-original-ref", "unrelated-descriptive"}:
+                    self.assertEqual(owner_queries, [])
                 if case in {"dotted-anchor", "plain-anchor", "named-package",
                             "named-hyphen-package", "canonical-control", "alphanumeric", "nested-child"}:
                     self.assertEqual(payload["status"], "success", payload["errors"])

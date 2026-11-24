@@ -1923,7 +1923,7 @@ class CleanupScanTests(unittest.TestCase):
             },
             {"tool": "gh", "argv": ["pr", "view", "41", "--repo", "owner/repo", "--json", "number,state,mergedAt,createdAt,headRefOid"]},
             {"tool": "bd", "argv": ["-C", repo_root, "config", "get", "issue_prefix", "--json"]},
-            {"tool": "gh", "argv": ["pr", "list", "--repo", "owner/repo", "--state", "open", "--json", "number,headRefName,createdAt"]},
+            {"tool": "gh", "argv": ["pr", "list", "--repo", "owner/repo", "--state", "open", "--limit", "1000", "--json", "number,headRefName,createdAt"]},
             {"tool": "bd", "argv": ["-C", repo_root, "list", "--status=in_progress", "--json", "--limit", "0"]},
             {"tool": "bd", "argv": ["-C", repo_root, "kv", "list", "--json"]},
             {"tool": "bd", "argv": ["-C", repo_root, "list", "--status=blocked", "--json", "--limit", "0"]},
