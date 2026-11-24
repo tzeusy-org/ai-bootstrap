@@ -28,12 +28,17 @@ fails:
 - discovery: missing or invalid authoritative `bd config get issue_prefix`, or
   any `gh pr list` / in-prefix candidate-source lookup failure (open-PR
   discovery is collection evidence, not a post-selection best effort);
+  open-PR discovery requests at most 1000 records and refuses completeness
+  when that cap is reached, even if the final record is otherwise valid;
   only `agent/<issue_prefix>-...` branches infer issues. A legacy
   `agent/<original>-YYYYMMDD`, `agent/<original>-<package>` or an attached
   lowercase alphanumeric suffix on a dotted-decimal child (e.g. `.2b`) can
   reuse one unambiguous canonical review/PR association after checking the
   original's current PR reference. Association is checked before branch
-  inference: descriptive-hyphen branches with neither a known PR binding nor
+  inference; suffix recovery additionally requires one exact project-wide
+  external-ref owner with valid original metadata, rechecked by current ID.
+  Missing, duplicate, malformed or changed owners fail the whole collection.
+  Descriptive-hyphen branches with neither a known PR binding nor
   a related known anchor infer no issue. Known conflicting bindings, ordinary
   canonical lookup failures and other malformed in-prefix identities remain
   failures
@@ -65,6 +70,7 @@ from delivery_package import metadata as bead_metadata, validate_delivery
 
 SCHEMA = "beads-pr-review-normalization/v1"
 COOLDOWN = timedelta(minutes=5)
+OPEN_PR_LIMIT = 1000
 BEAD_ID_RE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)+(?:\.[0-9]+)*\Z")
 ISSUE_PREFIX_RE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
 SAFE_CODE_RE = re.compile(r"[a-z0-9][a-z0-9-]*\Z")
@@ -472,6 +478,51 @@ def legacy_branch_original(
     return original_id
 
 
+def load_suffix_original(
+    original_id: str, number: int, prefix: str, repo_root: Path,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Confirm a canonical suffix association against unique current ownership."""
+    reference = f"gh-pr:{number}"
+    owners, error = command_json(
+        ["bd", "-C", str(repo_root), "list", "--external-ref", reference,
+         "--status", "all", "--limit", "0", "--json"], repo_root,
+    )
+    if error:
+        return None, error
+    if not isinstance(owners, list):
+        return None, "invalid-ownership-response"
+    if not owners:
+        return None, "missing-pr-owner"
+    if len(owners) != 1:
+        return None, "ambiguous-pr-ownership"
+    owner, error = requested_record(owners, original_id)
+    if error:
+        return None, error
+    if (
+        not original_id.startswith(f"{prefix}-")
+        or owner.get("external_ref") != reference
+        or not isinstance(owner.get("status"), str)
+        or owner["status"] not in BEAD_STATUSES
+        or not isinstance(owner.get("labels"), list)
+        or any(not isinstance(label, str) for label in owner["labels"])
+        or "pr-review-task" in labels(owner)
+    ):
+        return None, "invalid-pr-owner"
+    payload, error = command_json(
+        ["bd", "-C", str(repo_root), "show", original_id, "--json"], repo_root,
+    )
+    if error:
+        return None, error
+    original, error = requested_record(payload, original_id)
+    if error:
+        return None, error
+    if original.get("external_ref") != reference:
+        return None, "conflicting-original-pr"
+    if any(original.get(key) != owner.get(key) for key in ("status", "labels")):
+        return None, "conflicting-pr-owner"
+    return original, None
+
+
 def author_activity_evidence(
     original: dict[str, Any], number: int, branch: str, repo_root: Path,
 ) -> tuple[dict[str, Any] | None, str | None]:
@@ -523,7 +574,8 @@ def self_heal_candidates(
     slug, error = repo_slug(repo_root)
     if not error:
         payload, error = command_json(
-            ["gh", "pr", "list", "--repo", slug, "--state", "open", "--json", "number,headRefName,createdAt"],
+            ["gh", "pr", "list", "--repo", slug, "--state", "open",
+             "--limit", str(OPEN_PR_LIMIT), "--json", "number,headRefName,createdAt"],
             repo_root,
         )
     if error:
@@ -534,7 +586,9 @@ def self_heal_candidates(
         return [], False
 
     candidates: list[dict[str, Any]] = []
-    discovery_complete = True
+    discovery_complete = len(payload) < OPEN_PR_LIMIT
+    if not discovery_complete:
+        report_error(errors, "open-pr-limit-reached", "open-prs")
     for item in payload:
         if not isinstance(item, dict):
             report_error(errors, "invalid-record", "open-prs")
@@ -599,17 +653,14 @@ def self_heal_candidates(
                 }
             )
             continue
-        original_payload, original_error = command_json(["bd", "show", original_id, "--json"], repo_root)
-        if original_error is None:
-            original, identity_error = requested_record(original_payload, original_id)
+        if legacy_original is not None:
+            original, identity_error = load_suffix_original(original_id, number, prefix, repo_root)
         else:
-            original, identity_error = None, original_error
-        if (
-            original is not None
-            and legacy_original is not None
-            and original.get("external_ref") != f"gh-pr:{number}"
-        ):
-            original, identity_error = None, "conflicting-original-pr"
+            original_payload, original_error = command_json(["bd", "show", original_id, "--json"], repo_root)
+            if original_error is None:
+                original, identity_error = requested_record(original_payload, original_id)
+            else:
+                original, identity_error = None, original_error
         if original is None:
             report_error(errors, identity_error or "invalid-json", "self-heal")
             discovery_complete = False
